@@ -10,17 +10,15 @@ from google.genai.types import Tool, GenerateContentConfig, GoogleSearch
 from db import Database
 from config import ITEMS_PER_GROUP
 
-# Control variables for recommendations
+# Control variables
 NUM_MOVIES = 3
 NUM_SERIES = 2
 RATING_THRESHOLD = 5.0
 
-# TMDB configuration
 TMDB_API_KEY = os.environ.get("TMDB_API_KEY")
 TMDB_BASE_URL = "https://api.themoviedb.org/3"
 TMDB_IMAGE_BASE_URL = "https://image.tmdb.org/t/p/w500"
 
-# Gemini client setup
 client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 google_search_tool = Tool(
     google_search=GoogleSearch()
@@ -39,8 +37,7 @@ def get_user_taste(all_groups_history):
     
     system_instruction = (
         "Analyze the following watch history and provide a detailed, authentic description of the user's taste in films and TV shows. "
-        "Include specifics such as preferred genres, styles, directors, and any unique characteristics. The description should be insightful "
-        "and clearly reveal what kind of movies and TV series would best match the user's preferences. Return only the detailed description."
+        "Include preferred genres, styles, directors, and unique characteristics. Return only the detailed description."
     )
     config = GenerateContentConfig(
         system_instruction=system_instruction,
@@ -60,13 +57,12 @@ def get_user_taste(all_groups_history):
 
 def get_ai_recommendations(all_groups_history, user_taste):
     system_instruction = (
-        "You will receive a user's *complete* watch history and a description of the user's taste.\n"
+        "You will receive a user's complete watch history and a description of the user's taste.\n"
         "User Taste: " + user_taste + "\n\n"
-        "The watch history will be provided in the following format:\n\n"
+        "The watch history is provided as:\n\n"
         "Watch History - Title: <title>, IMDB ID: <imdbID>, User Rating: <userRating>\n\n"
-        f"Your task is to analyze the watch history along with the user's taste, and recommend {NUM_MOVIES} movies and {NUM_SERIES} TV series that the user will enjoy. "
-        "IMPORTANT: Do NOT recommend items that appear in the watch history or share the same IMDb ID as any watch history item.\n"
-        "Return the recommendations as a JSON array. Each element must be a JSON object with the keys: 'title', 'imdb_id', and 'image_url'."
+        f"Your task is to recommend {NUM_MOVIES} movies and {NUM_SERIES} TV series that the user will enjoy. "
+        "Do NOT recommend items that appear in the watch history. Return the recommendations as a JSON array with keys 'title', 'imdb_id', and 'image_url'."
     )
     config = GenerateContentConfig(
         system_instruction=system_instruction,
@@ -141,38 +137,27 @@ def print_history_groups(db):
     
     for i in range(0, len(unique_items), ITEMS_PER_GROUP):
         group = unique_items[i:i + ITEMS_PER_GROUP]
-        group_id = (i // ITEMS_PER_GROUP) + 1
-        
-        print(f"\nGroup {group_id}:")
-        for item in group:
-            rating = item[3] if item[3] is not None else "N/A"
-            print(f"Watch History - Title: {item[1]}, IMDB ID: {item[2]}, User Rating: {rating}")
-        
         group_history = format_history_for_ai(group)
         token_count = len(encoding.encode(group_history))
-        print(f"Group {group_id} token count: {token_count}")
-        all_groups_history += group_history
-        print("-" * 50)
+        print(f"Group {(i // ITEMS_PER_GROUP) + 1} token count: {token_count}")
+        all_groups_history += group_history + "\n" + ("-" * 50) + "\n"
     
     if not all_groups_history.strip():
         print("No watch history available. Skipping recommendations.")
         return
     
     new_taste = get_user_taste(all_groups_history)
-    print("\n--- New User Taste ---")
+    print("--- New User Taste ---")
     print(new_taste)
     
     prev_taste = db.get_latest_user_taste(db.user_id)
-    if prev_taste:
-        print("\n--- Previous User Taste ---")
-        print(prev_taste)
     chosen_taste = prev_taste if prev_taste and len(new_taste.split()) < len(prev_taste.split()) else new_taste
-    print("\n--- Chosen User Taste ---")
+    print("--- Chosen User Taste ---")
     print(chosen_taste)
     db.add_user_taste(db.user_id, chosen_taste)
     
     final_recommendations_text = get_ai_recommendations(all_groups_history, chosen_taste)
-    print("\n--- Final AI Recommendations (raw output) ---")
+    print("--- Final AI Recommendations (raw output) ---")
     print(final_recommendations_text)
     
     cleaned_text = clean_json_output(final_recommendations_text)
@@ -183,13 +168,10 @@ def print_history_groups(db):
         recommendations = []
     
     updated_recommendations = update_recommendations_with_images(recommendations)
-    print("\n--- Updated Recommendations with TMDB Images ---")
-    print(json.dumps(updated_recommendations, ensure_ascii=False, indent=2))
-    
     new_recommendations = filter_new_recommendations(updated_recommendations, unique_items)
     
     if len(new_recommendations) < (NUM_MOVIES + NUM_SERIES):
-        print("\nNot enough new recommendations generated, regenerating...")
+        print("Not enough new recommendations generated, regenerating...")
         regenerated_taste = get_user_taste(all_groups_history)
         print("Regenerated User Taste:", regenerated_taste)
         db.add_user_taste(db.user_id, regenerated_taste)
@@ -202,82 +184,27 @@ def print_history_groups(db):
             recommendations = []
         updated_recommendations = update_recommendations_with_images(recommendations)
         new_recommendations = filter_new_recommendations(updated_recommendations, unique_items)
-        print("\n--- Regenerated Updated Recommendations with TMDB Images ---")
-        print(json.dumps(new_recommendations, ensure_ascii=False, indent=2))
     else:
-        print("\n--- Final New Recommendations (not in watch history) ---")
+        print("Final new recommendations (not in watch history):")
         print(json.dumps(new_recommendations, ensure_ascii=False, indent=2))
     
     db.add_recommendation("all", "AI Recommendations", "mixed", json.dumps(new_recommendations, ensure_ascii=False))
     
     time.sleep(10)  # Rate limiting
 
-def generate_discovery_recommendations(
-    user_id: str,
-    gemini_api_key: str,
-    tmdb_api_key: str,
-    num_movies: int,
-    num_series: int,
-    extra_elements: str
-):
-    db = Database(user_id)
-    
-    items = db.get_all_items()  
-    user_history_text = ""
-    for row in items:
-        user_history_text += f"Watch History - Title: {row[1]}, IMDB ID: {row[2]}, User Rating: {row[3]}\n"
-
-    taste = db.get_latest_user_taste(user_id) or ""
-
-    system_instruction = (
-        "You will receive a user's *complete* watch history, a description of the user's taste, "
-        "and additional 'discovery' elements to consider.\n\n"
-        f"User Taste: {taste}\n"
-        f"Discovery Elements: {extra_elements}\n\n"
-        f"{user_history_text}\n\n"
-        f"Your task is to recommend {num_movies} movies and {num_series} TV series. "
-        "IMPORTANT: Do NOT recommend items that appear in the watch history. "
-        "Return the recommendations as a JSON array with objects containing 'title', 'imdb_id', 'image_url'."
-    )
-
-    os.environ["GEMINI_API_KEY"] = gemini_api_key
-    os.environ["TMDB_API_KEY"] = tmdb_api_key
-
-    client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+def get_ai_search_results(query: str, system_instruction: str):
     config = GenerateContentConfig(
         system_instruction=system_instruction,
         temperature=1,
         top_p=0.95,
         top_k=40,
-        max_output_tokens=8192,
+        max_output_tokens=1024,
         response_mime_type="text/plain",
         tools=[google_search_tool],
     )
-
     response = client.models.generate_content(
-        contents="",
+        contents=query,
         model="gemini-2.0-flash-exp",
         config=config,
     )
-    raw_output = response.text
-    cleaned_text = clean_json_output(raw_output)
-    
-    try:
-        recommendations = json.loads(cleaned_text)
-    except json.JSONDecodeError:
-        recommendations = []
-    
-    updated = update_recommendations_with_images(recommendations)
-    
-    watch_imdbs = {row[2] for row in items}  
-    final_recs = [r for r in updated if r.get("imdb_id") not in watch_imdbs]
-
-    rec_text = json.dumps(final_recs, ensure_ascii=False)
-    db.add_recommendation("discovery", "Discovery Recommendations", "mixed", rec_text)
-
-    return final_recs    
-
-if __name__ == "__main__":
-    user_id = "haj9"
-    db = Database(user_id)
-    print_history_groups(db)
+    return response.text
