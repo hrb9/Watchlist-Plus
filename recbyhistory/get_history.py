@@ -1,15 +1,17 @@
 # recbyhistory/get_history.py
 import logging
 from imdb_id_service import IMDBServiceClient
-from auth_client import PlexAuthClient
+from config import OVERSEERR_URL, OVERSEERR_API_TOKEN
+from overseerr_auth import OverseerrPlexClient
 
 class PlexHistory:
     def __init__(self, user_id):
         self.imdb_service = IMDBServiceClient()
-        auth_client = PlexAuthClient()
-        self.servers = auth_client.connect_to_plex(user_id)
-        # Store connected Plex servers
-
+        # Use OverseerrPlexClient instead of the old PlexAuthClient
+        plex_client = OverseerrPlexClient(OVERSEERR_URL, OVERSEERR_API_TOKEN)
+        self.servers = plex_client.connect_to_plex(user_id)
+        # If self.servers is None, you might want to log an error or handle it appropriately.
+    
     def get_item_resolution(self, item):
         try:
             if hasattr(item, 'media') and item.media:
@@ -69,9 +71,8 @@ class PlexHistory:
 
                         db.add_all_item(title, imdb_id, user_rating, resolution)
 
-                        # If watched, add to watch_history
                         if item.isWatched:
-                            print(item.title)  # Debug
+                            print(item.title)
                             if not imdb_id:
                                 continue
 
