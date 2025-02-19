@@ -1,0 +1,82 @@
+# .github/workflows/main-pipeline.yml
+name: main-pipeline
+
+permissions:
+  contents: read
+  security-events: write
+  packages: write
+  actions: write 
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build-and-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: CodeQL Init
+        uses: github/codeql-action/init@v3
+        with:
+          languages: python
+
+      - name: CodeQL Analyze
+        uses: github/codeql-action/analyze@v3
+
+      - name: Bump version
+        id: bump
+        run: |
+          chmod +x scripts/bump_version.sh
+          newver=$(./scripts/bump_version.sh | grep "New version" | awk '{print $3}')
+          echo "version=$newver" >> $GITHUB_OUTPUT
+
+      - name: AI Summary
+        run: |
+          echo "AI Summary: (Mock) Summarizing changes in main..."
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+
+      - name: Login to GHCR
+        run: |
+          echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+          
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v2  
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+        with:
+          driver: docker-container 
+      
+      - name: Build RecByHistory Docker Images for Multiple Architectures
+        run: |
+          REPO=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          VERSION=${{ steps.bump.outputs.version }}
+    
+          echo "Building RecByHistory image for amd64..."
+          docker buildx build --platform linux/amd64 --load -t ghcr.io/$REPO/recbyhistory:main-${VERSION}-amd64 -f recbyhistory/Dockerfile .
+    
+          echo "Building RecByHistory image for arm64..."
+          docker buildx build --platform linux/arm64/v8 --load -t ghcr.io/$REPO/recbyhistory:main-${VERSION}-arm64 -f recbyhistory/Dockerfile .
+    
+          echo "Creating multi-architecture manifest image for RecByHistory and pushing..."
+          docker buildx build --platform linux/amd64,linux/arm64/v8 --push -t ghcr.io/$REPO/recbyhistory:main-${VERSION} -t ghcr.io/$REPO/recbyhistory:latest .
+      
+      - name: Build WatchlistDispatcher Docker Images for Multiple Architectures
+        run: |
+          REPO=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          VERSION=${{ steps.bump.outputs.version }}
+    
+          echo "Building WatchlistDispatcher image for amd64..."
+          docker buildx build --platform linux/amd64 --load -t ghcr.io/$REPO/watchlistdispatcher:main-${VERSION}-amd64 -f watchlistdispatcher/Dockerfile .
+    
+          echo "Building WatchlistDispatcher image for arm64..."
+          docker buildx build --platform linux/arm64/v8 --load -t ghcr.io/$REPO/watchlistdispatcher:main-${VERSION}-arm64 -f watchlistdispatcher/Dockerfile .
+    
+          echo "Creating multi-architecture manifest image for WatchlistDispatcher and pushing..."
+          docker buildx build --platform linux/amd64,linux/arm64/v8 --push -t ghcr.io/$REPO/watchlistdispatcher:main-${VERSION} -t ghcr.io/$REPO/watchlistdispatcher:latest .

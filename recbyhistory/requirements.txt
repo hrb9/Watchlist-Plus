@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+requests
+pydantic
+tiktoken
+google-genai
+plexapi
+apscheduler
+
