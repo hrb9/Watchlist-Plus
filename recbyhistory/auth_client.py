@@ -1,72 +1,83 @@
-from flask import Flask, request, jsonify
+import requests
 from plexapi.myplex import MyPlexAccount
-import sqlite3
-import os
 
-app = Flask(__name__)
+class PlexAuthClient:
+    def __init__(self, base_url="http://localhost:5333"):
+        """
+        :param base_url: The base URL of the service providing the /connect endpoint.
+                        For example, 'http://auth_service:5333' or 'http://plexauthgui:5332'
+        """
+        self.base_url = base_url
+    
+    def connect_to_plex(self, user_id, connection_type='account'):
+        """
+        Connect to Plex using user_id.
+        
+        :param user_id: The identifier of the user in your auth_service (or plexauthgui).
+        :param connection_type: One of 'servers', 'account', or 'users'.
+          - 'users': to retrieve a list of all Plex users (if your /connect endpoint returns them).
+          - 'account': to retrieve the Plex token and connect to MyPlexAccount.
+          - 'servers': (if relevant) might also be used, though the code below typically is for 'account'.
+        
+        The /connect endpoint is expected to return JSON in one of these forms:
+          {
+            "token": <plex_token>,
+            ... possibly other fields ...
+          }
+          or
+          {
+            "users": [...]
+          }
+        
+        If 'users', it returns the list of user_ids from the JSON.
+        Otherwise, for 'account' or 'servers', we take the 'token' and create MyPlexAccount,
+        then attempt to connect to all resources (servers).
+        
+        :return:
+          - If connection_type='users': a list of user identifiers from the JSON
+          - Otherwise, a list of connected Plex servers (MyPlexServer objects)
+            If unsuccessful, returns None
+        """
+        data = {
+            'user_id': user_id,
+            'type': connection_type
+        }
+        
+        response = requests.post(f"{self.base_url}/connect", json=data)
+        if response.status_code == 200:
+            result = response.json()
+            
+            # If we're asking for 'users', presumably the service returns { "users": [...] }
+            if connection_type == 'users':
+                return result.get('users', [])
+            
+            # Otherwise, we interpret 'account' or 'servers'
+            plex_token = result.get('token')
+            if not plex_token:
+                # no token found, cannot proceed
+                return None
+            
+            # Build a MyPlexAccount using the token
+            plexuser = MyPlexAccount(token=plex_token)
+            
+            # Attempt to connect to servers
+            servers = []
+            for resource in plexuser.resources():
+                try:
+                    server = resource.connect(timeout=600)  # connect to each resource
+                    if server:
+                        servers.append(server)
+                except Exception as e:
+                    print(f"Error connecting to server {resource.name}: {e}")
+            return servers
+        
+        # If not status_code 200, or some error
+        return None
 
-def get_db_path():
-    return os.path.join('/app/db', 'auth.db')
-
-def get_token_for_user(user_id):
-    conn = sqlite3.connect(get_db_path())
-    c = conn.cursor()
-    c.execute('SELECT token FROM auth_tokens WHERE user_id = ?', (user_id,))
-    row = c.fetchone()
-    conn.close()
-    return row[0] if row else None
-
-def get_all_users():
-    conn = sqlite3.connect(get_db_path())
-    c = conn.cursor()
-    c.execute('SELECT DISTINCT user_id FROM auth_tokens')
-    rows = c.fetchall()
-    conn.close()
-    return [r[0] for r in rows]
-
-def get_plex_account(user_id):
-    token = get_token_for_user(user_id)
-    if not token:
-        return None, None
-    return MyPlexAccount(token=token), token
-
-@app.route('/connect', methods=['POST'])
-def connect():
-    data = request.json
-    user_id = data.get('user_id')
-    connection_type = data.get('type')
-
-    try:
-        if connection_type == 'users':
-            users = get_all_users()
-            return jsonify({'users': users})
-
-        account, token = get_plex_account(user_id)
-        if not account:
-            return jsonify({'error': 'Token not found for user'}), 404
-
-        if connection_type == 'account':
-            return jsonify({
-                'token': token,
-                'account': {
-                    'username': account.username,
-                    'email': account.email
-                }
-            })
-        else:
-            return jsonify({'error': 'Invalid connection type'}), 400
-
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/users', methods=['GET'])
-def list_users():
-    """Return list of user_ids from auth.db"""
-    try:
-        users = get_all_users()
-        return jsonify({'users': users})
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-if __name__ == '__main__':
-    app.run(port=5333, host='0.0.0.0')
+    def get_all_users(self):
+        """
+        Convenience method to retrieve all user IDs from the service
+        by calling connect_to_plex(..., connection_type='users').
+        Returns a list of user IDs or an empty list if not found.
+        """
+        return self.connect_to_plex(None, 'users')
