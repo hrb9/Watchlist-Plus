@@ -75,29 +75,23 @@ CURRENT_USER = None  # dict with keys: id, last_history, last_taste, last_monthl
 # ----------------- Helper Functions -----------------
 def check_auth_me():
     """
-    Calls the /auth/me endpoint to get the currently authenticated user.
-    Adds an Accept header to ensure JSON response.
-    Logs the raw response text if JSON decoding fails.
+    Calls the /auth/me endpoint using the X-Api-Key header.
     """
     url = f"{OVERSEERR_URL}/api/v1/auth/me"
     headers = {
-        "Authorization": f"Bearer {OVERSEERR_API_TOKEN}",
-        "Accept": "application/json"
+        "Accept": "application/json",
+        "X-Api-Key": os.environ.get("OVERSEERR_API_TOKEN")
     }
     try:
         response = requests.get(url, headers=headers, timeout=10)
         response.raise_for_status()
-        if not response.text.strip():
-            logging.error("Response from /auth/me is empty.")
-            return None
         user = response.json()
         logging.info(f"/auth/me returned user: {user.get('id')} - {user.get('displayName')}")
         return user
     except Exception as e:
-        raw = response.text if 'response' in locals() else 'No response'
-        logging.error(f"Error calling /auth/me: {e}. Response content: {raw}")
+        logging.error(f"Error calling /auth/me: {e}. Response content: {response.text if response else 'No response'}")
         return None
-
+    
 def run_history_task(user_id):
     try:
         db = Database(user_id)
