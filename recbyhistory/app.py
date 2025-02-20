@@ -6,6 +6,8 @@ from fastapi import FastAPI, Header, HTTPException, Depends
 from pydantic import BaseModel
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
+from rec import print_history_groups, generate_discovery_recommendations, get_ai_search_results
+
 
 # Import existing modules from the project
 from db import Database
