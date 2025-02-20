@@ -8,7 +8,8 @@ from pydantic import BaseModel
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
-# Import modules from the project
+# Import modules from the project.
+# Note: PlexHistory (from get_history.py) uses OverseerrPlexClient from overseerr_auth.py
 from db import Database
 from get_history import PlexHistory
 from rec import (
@@ -18,7 +19,7 @@ from rec import (
 )
 from config import OVERSEERR_URL, OVERSEERR_API_TOKEN
 
-# Configure logging to display INFO-level messages
+# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -72,24 +73,30 @@ async def verify_overseerr_token(x_overseerr_token: str = Header(...)):
         raise HTTPException(status_code=401, detail="Invalid Overseerr Token")
     return x_overseerr_token
 
+# ----------------- Helper Function to Fetch Plex Users from Overseerr -----------------
+def fetch_plex_users():
+    """
+    Uses the new Overseerr endpoint to get Plex settings for all users.
+    Expected endpoint: GET /api/v1/settings/plex/users
+    Returns a list of Plex user objects.
+    """
+    url = f"{OVERSEERR_URL}/api/v1/settings/plex/users"
+    try:
+        response = requests.get(url, headers={"Authorization": f"Bearer {OVERSEERR_API_TOKEN}"}, timeout=10)
+        response.raise_for_status()
+        plex_users = response.json()  # Expecting list of objects with "userId" (or "id") field
+        logging.info(f"Fetched {len(plex_users)} Plex user settings from Overseerr.")
+        return plex_users
+    except Exception as e:
+        logging.error(f"Error fetching Plex users from Overseerr: {e}")
+        return []
+
 # ----------------- Scheduled Task Functions -----------------
 def scheduled_update_history():
     logging.info("Starting daily watch history update...")
-    try:
-        response = requests.get(
-            f"{OVERSEERR_URL}/api/v1/users",
-            headers={"Authorization": f"Bearer {OVERSEERR_API_TOKEN}"},
-            timeout=10
-        )
-        response.raise_for_status()
-        users = response.json()  # Expecting a list of user objects with 'id' field
-        logging.info(f"Fetched {len(users)} users from Overseerr.")
-    except Exception as e:
-        logging.error(f"Error fetching users from Overseerr: {e}")
-        return
-
-    for user in users:
-        user_id = str(user.get("id"))
+    plex_users = fetch_plex_users()
+    for plex_user in plex_users:
+        user_id = str(plex_user.get("userId") or plex_user.get("id"))
         if user_id:
             try:
                 db = Database(user_id)
@@ -99,26 +106,14 @@ def scheduled_update_history():
             except Exception as e:
                 logging.error(f"Error updating history for user {user_id}: {e}")
         else:
-            logging.warning("User missing id; skipping.")
+            logging.warning("User missing id in Plex settings; skipping.")
     logging.info("Daily watch history update completed.")
 
 def scheduled_update_user_taste():
     logging.info("Starting weekly user taste update...")
-    try:
-        response = requests.get(
-            f"{OVERSEERR_URL}/api/v1/users",
-            headers={"Authorization": f"Bearer {OVERSEERR_API_TOKEN}"},
-            timeout=10
-        )
-        response.raise_for_status()
-        users = response.json()
-        logging.info(f"Fetched {len(users)} users from Overseerr for taste update.")
-    except Exception as e:
-        logging.error(f"Error fetching users from Overseerr: {e}")
-        return
-
-    for user in users:
-        user_id = str(user.get("id"))
+    plex_users = fetch_plex_users()
+    for plex_user in plex_users:
+        user_id = str(plex_user.get("userId") or plex_user.get("id"))
         gemini_api_key = os.environ.get("GEMINI_API_KEY")
         tmdb_api_key = os.environ.get("TMDB_API_KEY")
         if user_id and gemini_api_key and tmdb_api_key:
@@ -136,21 +131,9 @@ def scheduled_update_user_taste():
 
 def scheduled_generate_monthly_recs():
     logging.info("Starting monthly recommendations generation...")
-    try:
-        response = requests.get(
-            f"{OVERSEERR_URL}/api/v1/users",
-            headers={"Authorization": f"Bearer {OVERSEERR_API_TOKEN}"},
-            timeout=10
-        )
-        response.raise_for_status()
-        users = response.json()
-        logging.info(f"Fetched {len(users)} users from Overseerr for monthly recommendations.")
-    except Exception as e:
-        logging.error(f"Error fetching users from Overseerr: {e}")
-        return
-
-    for user in users:
-        user_id = str(user.get("id"))
+    plex_users = fetch_plex_users()
+    for plex_user in plex_users:
+        user_id = str(plex_user.get("userId") or plex_user.get("id"))
         gemini_api_key = os.environ.get("GEMINI_API_KEY")
         tmdb_api_key = os.environ.get("TMDB_API_KEY")
         if user_id and gemini_api_key and tmdb_api_key:
@@ -176,7 +159,7 @@ scheduler.start()
 # ----------------- Startup Event (First-Time Run) -----------------
 @app.on_event("startup")
 def startup_event():
-    logging.info("Application startup: running initial tasks...")
+    logging.info("Application startup: running initial scheduled tasks...")
     try:
         scheduled_update_history()
         scheduled_update_user_taste()
