@@ -3,17 +3,22 @@ import os
 import uvicorn
 import requests
 import logging
-from fastapi import FastAPI, Header, HTTPException, Depends
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from datetime import datetime, timedelta
 
-# Import modules from the project.
+# Import modules from the project
 from db import Database
 from get_history import PlexHistory
-from rec import print_history_groups, generate_discovery_recommendations, get_ai_search_results
-from config import OVERSEERR_URL, OVERSEERR_API_TOKEN
+from rec import (
+    print_history_groups,
+    generate_discovery_recommendations,
+    get_ai_search_results
+)
+from config import OVERSEERR_URL  # If you still need Overseerr for notifications or watchlist
+# from config import OVERSEERR_API_TOKEN  # Uncomment if needed for other calls
 
 # Configure logging
 logging.basicConfig(
@@ -24,7 +29,7 @@ logging.basicConfig(
 
 app = FastAPI(
     title="RecByHistory",
-    description="A recommendation engine based on user watch history integrated with Overseerr and AI search.",
+    description="A recommendation engine based on user watch history using PlexAuthClient for Plex authentication.",
     version="1.0"
 )
 
@@ -61,38 +66,11 @@ class WatchlistRequest(BaseModel):
     imdb_id: str
     media_type: str  # e.g., "movie" or "series"
 
-# ----------------- Middleware for Overseerr Token -----------------
-async def verify_overseerr_token(x_overseerr_token: str = Header(...)):
-    expected_token = os.environ.get("OVERSEERR_API_TOKEN")
-    if not expected_token or x_overseerr_token != expected_token:
-        logging.error("Invalid Overseerr token provided.")
-        raise HTTPException(status_code=401, detail="Invalid Overseerr Token")
-    return x_overseerr_token
-
-# ----------------- Global Variables -----------------
-CURRENT_USER = None  # dict with keys: id, last_history, last_taste, last_monthly
-
-# ----------------- Helper Functions -----------------
-def check_auth_me():
+# ----------------- Scheduled Task Functions -----------------
+def run_history_task(user_id: str):
     """
-    Calls the /auth/me endpoint using the X-Api-Key header.
+    Runs the daily watch history update for the given user ID.
     """
-    url = f"{OVERSEERR_URL}/api/v1/auth/me"
-    headers = {
-        "Accept": "application/json",
-        "X-Api-Key": os.environ.get("OVERSEERR_API_TOKEN")
-    }
-    try:
-        response = requests.get(url, headers=headers, timeout=10)
-        response.raise_for_status()
-        user = response.json()
-        logging.info(f"/auth/me returned user: {user.get('id')} - {user.get('displayName')}")
-        return user
-    except Exception as e:
-        logging.error(f"Error calling /auth/me: {e}. Response content: {response.text if response else 'No response'}")
-        return None
-    
-def run_history_task(user_id):
     try:
         db = Database(user_id)
         plex = PlexHistory(user_id)
@@ -101,7 +79,10 @@ def run_history_task(user_id):
     except Exception as e:
         logging.error(f"Error in history task for user {user_id}: {e}")
 
-def run_taste_task(user_id):
+def run_taste_task(user_id: str):
+    """
+    Runs the weekly taste update for the given user ID.
+    """
     try:
         db = Database(user_id)
         print_history_groups(db)
@@ -109,7 +90,10 @@ def run_taste_task(user_id):
     except Exception as e:
         logging.error(f"Error in taste task for user {user_id}: {e}")
 
-def run_monthly_task(user_id):
+def run_monthly_task(user_id: str):
+    """
+    Runs the monthly recommendations generation for the given user ID.
+    """
     try:
         db = Database(user_id)
         print_history_groups(db)
@@ -117,20 +101,22 @@ def run_monthly_task(user_id):
     except Exception as e:
         logging.error(f"Error in monthly task for user {user_id}: {e}")
 
+# In this example, we assume there's only one "current" user, defined in the environment.
+# If you want multiple users, you can adapt the logic accordingly.
+CURRENT_USER = None
+
 def process_current_user_tasks():
     """
-    Checks the currently authenticated user via /auth/me and, based on last-run timestamps,
-    executes the tasks for history, taste, and monthly recommendations.
+    Checks the CURRENT_PLEX_USER environment variable and runs tasks
+    (history, taste, monthly) based on last-run timestamps.
     """
     global CURRENT_USER
-    user = check_auth_me()
-    if not user:
-        logging.info("No authenticated user returned from /auth/me.")
+    user_id = os.environ.get("CURRENT_PLEX_USER")
+    if not user_id:
+        logging.info("No CURRENT_PLEX_USER defined; skipping task processing.")
         return
 
-    user_id = str(user.get("id"))
     now = datetime.utcnow()
-
     if CURRENT_USER is None or CURRENT_USER.get("id") != user_id:
         logging.info(f"New user detected: {user_id}. Running all tasks immediately.")
         CURRENT_USER = {
@@ -148,25 +134,25 @@ def process_current_user_tasks():
             logging.info(f"Daily interval reached for user {user_id}. Running history task.")
             run_history_task(user_id)
             CURRENT_USER["last_history"] = now
+
         if now - CURRENT_USER.get("last_taste", now) >= timedelta(days=7):
             logging.info(f"Weekly interval reached for user {user_id}. Running taste task.")
             run_taste_task(user_id)
             CURRENT_USER["last_taste"] = now
+
         if now - CURRENT_USER.get("last_monthly", now) >= timedelta(days=30):
             logging.info(f"Monthly interval reached for user {user_id}. Running monthly recommendations task.")
             run_monthly_task(user_id)
             CURRENT_USER["last_monthly"] = now
 
-# ----------------- Scheduler -----------------
+# Schedule the process_current_user_tasks to run every minute
 scheduler = BackgroundScheduler()
-# Schedule the check_auth_me task every minute
 scheduler.add_job(process_current_user_tasks, IntervalTrigger(minutes=1))
 scheduler.start()
 
-# ----------------- Startup and Shutdown Events -----------------
 @app.on_event("startup")
 def startup_event():
-    logging.info("Application startup: running initial /auth/me check and tasks...")
+    logging.info("Application startup: running initial user tasks...")
     process_current_user_tasks()
 
 @app.on_event("shutdown")
@@ -175,8 +161,11 @@ def shutdown_event():
     logging.info("Application shutdown: scheduler stopped.")
 
 # ----------------- Endpoints -----------------
-@app.post("/init", dependencies=[Depends(verify_overseerr_token)])
+@app.post("/init")
 def init_data(request: InitRequest):
+    """
+    Initialize DB, load Plex watch history, and generate monthly recommendations for the user.
+    """
     logging.info(f"Received init request for user {request.user_id}")
     os.environ["GEMINI_API_KEY"] = request.gemini_api_key
     os.environ["TMDB_API_KEY"] = request.tmdb_api_key
@@ -216,14 +205,14 @@ def init_data(request: InitRequest):
     logging.info("Init process completed successfully.")
     return {"status": "OK", "message": "DB, history, and monthly recommendations created."}
 
-@app.get("/taste", dependencies=[Depends(verify_overseerr_token)])
+@app.get("/taste")
 def get_user_taste_endpoint(user_id: str):
     db = Database(user_id)
     taste = db.get_latest_user_taste(user_id)
     logging.info(f"Retrieved taste for user {user_id}: {taste}")
     return {"user_id": user_id, "taste": taste}
 
-@app.get("/history", dependencies=[Depends(verify_overseerr_token)])
+@app.get("/history")
 def get_user_history(user_id: str):
     db = Database(user_id)
     rows = db.get_all_items()
@@ -240,7 +229,7 @@ def get_user_history(user_id: str):
     logging.info(f"Returning history for user {user_id} with {len(results)} items.")
     return {"user_id": user_id, "history": results}
 
-@app.get("/monthly_recommendations", dependencies=[Depends(verify_overseerr_token)])
+@app.get("/monthly_recommendations")
 def get_monthly_recommendations(user_id: str):
     db = Database(user_id)
     cursor = db.conn.cursor()
@@ -259,7 +248,7 @@ def get_monthly_recommendations(user_id: str):
     logging.info(f"Returning monthly recommendations for user {user_id}.")
     return {"user_id": user_id, "monthly_recommendations": recs}
 
-@app.post("/discovery_recommendations", dependencies=[Depends(verify_overseerr_token)])
+@app.post("/discovery_recommendations")
 def post_discovery_recommendations(request: DiscoveryRequest):
     logging.info(f"Received discovery recommendations request for user {request.user_id}")
     final_recs = generate_discovery_recommendations(
@@ -270,10 +259,10 @@ def post_discovery_recommendations(request: DiscoveryRequest):
         num_series=request.num_series,
         extra_elements=request.extra_elements
     )
-    logging.info("Discovery recommendations generated and pushed to Overseerr.")
+    logging.info("Discovery recommendations generated.")
     return {"discovery_recommendations": final_recs}
 
-@app.post("/ai_search", dependencies=[Depends(verify_overseerr_token)])
+@app.post("/ai_search")
 def ai_search(request: AISearchRequest):
     db = Database(request.user_id)
     user_taste = db.get_latest_user_taste(request.user_id) or "No user taste available."
@@ -287,7 +276,7 @@ def ai_search(request: AISearchRequest):
     logging.info(f"AI search executed for user {request.user_id}.")
     return {"user_id": request.user_id, "search_results": results}
 
-@app.post("/send_notification", dependencies=[Depends(verify_overseerr_token)])
+@app.post("/send_notification")
 def send_notification(notification: NotificationRequest):
     logging.info(f"Sending notification for user {notification.user_id}")
     overseerr_url = os.environ.get("OVERSEERR_URL")
@@ -310,7 +299,7 @@ def send_notification(notification: NotificationRequest):
         logging.error(f"Notification error for user {notification.user_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Notification error: {e}")
 
-@app.post("/add_to_watchlist", dependencies=[Depends(verify_overseerr_token)])
+@app.post("/add_to_watchlist")
 def add_to_watchlist(request: WatchlistRequest):
     logging.info(f"Adding content {request.imdb_id} to watchlist for user {request.user_id}")
     overseerr_url = os.environ.get("OVERSEERR_URL")

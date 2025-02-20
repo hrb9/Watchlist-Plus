@@ -1,16 +1,16 @@
 # recbyhistory/get_history.py
 import logging
 from imdb_id_service import IMDBServiceClient
-from config import OVERSEERR_URL, OVERSEERR_API_TOKEN
-from overseerr_auth import OverseerrPlexClient
+from auth_client import PlexAuthClient
 
 class PlexHistory:
     def __init__(self, user_id):
         self.imdb_service = IMDBServiceClient()
-        # Use OverseerrPlexClient instead of the old PlexAuthClient
-        plex_client = OverseerrPlexClient(OVERSEERR_URL, OVERSEERR_API_TOKEN)
-        self.servers = plex_client.connect_to_plex(user_id)
-        # If self.servers is None, you might want to log an error or handle it appropriately.
+        # יצירת מופע של PlexAuthClient
+        auth_client = PlexAuthClient()  
+        self.servers = auth_client.connect_to_plex(user_id)
+        if not self.servers:
+            logging.error(f"Failed to connect to Plex for user {user_id}")
     
     def get_item_resolution(self, item):
         try:
@@ -37,7 +37,6 @@ class PlexHistory:
                 except Exception as e:
                     logging.error(f"Error fetching show for {item.title}: {e}")
                     show = None
-                
                 if show and hasattr(show, 'userRating') and show.userRating != 0.0:
                     return show.userRating
                 if hasattr(item, 'userRating') and item.userRating != 0.0:
@@ -63,7 +62,6 @@ class PlexHistory:
                         if ratingKey is not None:
                             item = item._server.fetchItem(ratingKey)
                         
-                        # Add item to all_items table
                         resolution = self.get_item_resolution(item)
                         user_rating = self.get_user_rating(item)
                         imdb_id = self.get_imdb_id(item)
@@ -75,20 +73,17 @@ class PlexHistory:
                             print(item.title)
                             if not imdb_id:
                                 continue
-
                             if item.type == 'episode':
                                 try:
                                     show = getattr(item, 'show', lambda: None)()
                                 except Exception as e:
                                     logging.error(f"Error fetching show for {item.title}: {e}")
                                     show = None
-
                                 if show:
                                     show_title = show.title
                                     show_imdb = self.get_imdb_id(show)
                                     show_rating = show.userRating if (hasattr(show, 'userRating') and show.userRating != 0.0) else user_rating
                                     show_resolution = self.get_item_resolution(show)
-
                                     if show_title not in grouped_episodes:
                                         grouped_episodes[show_title] = {
                                             'title': show_title,
@@ -102,7 +97,6 @@ class PlexHistory:
                                         episode_rating = show_rating
                                     episode_imdb = self.get_imdb_id(item)
                                     episode_resolution = resolution
-
                                     grouped_episodes[show_title]['episodes'].append({
                                         'title': item.title,
                                         'imdbID': episode_imdb,
@@ -133,8 +127,6 @@ class PlexHistory:
                                     'userRating': user_rating,
                                     'resolution': resolution
                                 })
-
         for show_data in grouped_episodes.values():
             history.append(show_data)
-
         return history
