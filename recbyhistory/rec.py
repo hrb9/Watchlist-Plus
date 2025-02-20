@@ -8,7 +8,7 @@ import tiktoken
 from google import genai
 from google.genai.types import Tool, GenerateContentConfig, GoogleSearch
 from db import Database
-from config import ITEMS_PER_GROUP
+from config import ITEMS_PER_GROUP, OVERSEERR_URL, OVERSEERR_API_TOKEN
 
 # Control variables
 NUM_MOVIES = 3
@@ -189,7 +189,15 @@ def print_history_groups(db):
         print("Final new recommendations (not in watch history):")
         print(json.dumps(new_recommendations, ensure_ascii=False, indent=2))
     
+    # Save recommendations under group "all" in the DB
     db.add_recommendation("all", "AI Recommendations", "mixed", json.dumps(new_recommendations, ensure_ascii=False))
+    
+    # Push discovery recommendations to Overseerr via its API
+    push_result = push_discovery_recommendations(db.user_id, new_recommendations)
+    if push_result:
+        print("Successfully pushed discovery recommendations to Overseerr.")
+    else:
+        print("Failed to push discovery recommendations to Overseerr.")
     
     time.sleep(10)  # Rate limiting
 
@@ -214,17 +222,37 @@ def get_ai_search_results(query: str, system_instruction: str):
     )
     return response.text
 
+def push_discovery_recommendations(user_id: str, recommendations: list):
+    """
+    Pushes the discovery recommendations to Overseerr using the /settings/discover/add endpoint.
+    Expects recommendations as a list of dictionaries with keys 'title', 'imdb_id', and 'image_url'.
+    """
+    url = f"{OVERSEERR_URL}/api/v1/settings/discover/add"
+    headers = {
+        "Authorization": f"Bearer {OVERSEERR_API_TOKEN}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "userId": user_id,
+        "recommendations": recommendations
+    }
+    try:
+        resp = requests.post(url, headers=headers, json=payload, timeout=10)
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as e:
+        print(f"Error pushing discovery recommendations to Overseerr for user {user_id}: {e}")
+        return None
+
 def generate_discovery_recommendations(user_id: str, gemini_api_key: str, tmdb_api_key: str, num_movies: int, num_series: int, extra_elements: str):
     """
     Generates "Discovery" recommendations for the given user.
-    It fetches the user's watch history from the DB, retrieves the latest user taste,
-    and builds a prompt including extra elements. It then uses the Gemini AI model to generate recommendations.
-    The recommendations are filtered to exclude items already in the watch history.
-    The final recommendations are saved in the DB under group_id "discovery" and returned.
+    Retrieves the user's watch history and taste, builds a prompt with extra discovery elements,
+    uses the Gemini AI model to generate recommendations, filters out items already watched,
+    saves them in the DB under group "discovery", and pushes them to Overseerr.
     """
     db = Database(user_id)
     
-    # Retrieve watch history text from the DB
     items = db.get_all_items()
     user_history_text = ""
     for row in items:
@@ -273,4 +301,10 @@ def generate_discovery_recommendations(user_id: str, gemini_api_key: str, tmdb_a
     final_recs = [r for r in updated_recommendations if r.get("imdb_id") not in watched_imdbs]
     
     db.add_recommendation("discovery", "Discovery Recommendations", "mixed", json.dumps(final_recs, ensure_ascii=False))
+    # Push recommendations to Overseerr
+    push_result = push_discovery_recommendations(user_id, final_recs)
+    if push_result:
+        print("Discovery recommendations pushed to Overseerr successfully.")
+    else:
+        print("Failed to push discovery recommendations to Overseerr.")
     return final_recs
