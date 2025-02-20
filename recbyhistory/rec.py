@@ -19,6 +19,7 @@ TMDB_API_KEY = os.environ.get("TMDB_API_KEY")
 TMDB_BASE_URL = "https://api.themoviedb.org/3"
 TMDB_IMAGE_BASE_URL = "https://image.tmdb.org/t/p/w500"
 
+# Initialize Gemini client and Google search tool
 client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 google_search_tool = Tool(
     google_search=GoogleSearch()
@@ -193,6 +194,10 @@ def print_history_groups(db):
     time.sleep(10)  # Rate limiting
 
 def get_ai_search_results(query: str, system_instruction: str):
+    """
+    Performs an AI-based search using the given query and system instruction.
+    Returns the raw text response.
+    """
     config = GenerateContentConfig(
         system_instruction=system_instruction,
         temperature=1,
