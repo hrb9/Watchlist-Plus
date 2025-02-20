@@ -1,4 +1,5 @@
 # recbyhistory/app.py
+
 import os
 import uvicorn
 import requests
@@ -8,8 +9,6 @@ from pydantic import BaseModel
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from datetime import datetime, timedelta
-from auth_client import PlexAuthClient
-
 
 # Import modules from the project
 from db import Database
@@ -19,6 +18,7 @@ from rec import (
     generate_discovery_recommendations,
     get_ai_search_results
 )
+from auth_client import PlexAuthClient  # עדיין נדרש אם add_to_watchlist משתמש בזה
 
 # Configure logging
 logging.basicConfig(
@@ -66,6 +66,7 @@ class WatchlistRequest(BaseModel):
     imdb_id: str
     media_type: str  # e.g., "movie" or "series"
 
+
 # ----------------- Scheduled Task Functions -----------------
 def run_history_task(user_id: str):
     """
@@ -101,59 +102,77 @@ def run_monthly_task(user_id: str):
     except Exception as e:
         logging.error(f"Error in monthly task for user {user_id}: {e}")
 
-# In this example, we assume there's only one "current" user, defined in the environment.
-# If you want multiple users, you can adapt the logic accordingly.
-CURRENT_USER = None
 
-def process_current_user_tasks():
+# גלובלי: נזכור מתי בפעם האחרונה הרצנו משימות לכל user_id
+USER_SCHEDULE = {}
+
+def get_all_users_from_plexauth():
     """
-    Checks the CURRENT_PLEX_USER environment variable and runs tasks
-    (history, taste, monthly) based on last-run timestamps.
+    Calls the plexauthgui service (which also acts like auth_service) to retrieve all users.
+    נניח שיש אנדפוינט /users שמחזיר JSON כמו: { 'users': [ 'user_xxx', 'user_yyy' ] }
     """
-    global CURRENT_USER
-    user_id = os.environ.get("CURRENT_PLEX_USER")
-    if not user_id:
-        logging.info("No CURRENT_PLEX_USER defined; skipping task processing.")
+    plexauth_url = os.environ.get("PLEXAUTH_URL", "http://plexauthgui:5332")
+    try:
+        r = requests.get(f"{plexauth_url}/users", timeout=10)
+        r.raise_for_status()
+        data = r.json()
+        return data.get('users', [])
+    except Exception as e:
+        logging.error(f"Error fetching user list from plexauthgui: {e}")
+        return []
+
+def process_all_users():
+    """
+    רץ בכל דקה (IntervalTrigger). שולף את רשימת המשתמשים מ־plexauthgui, 
+    ומריץ לכל משתמש את המשימות (היסטוריה, טעם, המלצות) על פי לוחות זמנים: יום, שבוע, חודש.
+    """
+    global USER_SCHEDULE
+
+    user_list = get_all_users_from_plexauth()
+    if not user_list:
+        logging.info("No users returned from plexauthgui; skipping tasks.")
         return
 
     now = datetime.utcnow()
-    if CURRENT_USER is None or CURRENT_USER.get("id") != user_id:
-        logging.info(f"New user detected: {user_id}. Running all tasks immediately.")
-        CURRENT_USER = {
-            "id": user_id,
-            "last_history": now,
-            "last_taste": now,
-            "last_monthly": now
-        }
-        run_history_task(user_id)
-        run_taste_task(user_id)
-        run_monthly_task(user_id)
-    else:
-        # Check if sufficient time has passed for each task
-        if now - CURRENT_USER.get("last_history", now) >= timedelta(days=1):
-            logging.info(f"Daily interval reached for user {user_id}. Running history task.")
+    for user_id in user_list:
+        if user_id not in USER_SCHEDULE:
+            logging.info(f"New user {user_id} detected; running tasks immediately.")
+            USER_SCHEDULE[user_id] = {
+                'last_history': now,
+                'last_taste': now,
+                'last_monthly': now
+            }
             run_history_task(user_id)
-            CURRENT_USER["last_history"] = now
-
-        if now - CURRENT_USER.get("last_taste", now) >= timedelta(days=7):
-            logging.info(f"Weekly interval reached for user {user_id}. Running taste task.")
             run_taste_task(user_id)
-            CURRENT_USER["last_taste"] = now
-
-        if now - CURRENT_USER.get("last_monthly", now) >= timedelta(days=30):
-            logging.info(f"Monthly interval reached for user {user_id}. Running monthly recommendations task.")
             run_monthly_task(user_id)
-            CURRENT_USER["last_monthly"] = now
+        else:
+            times = USER_SCHEDULE[user_id]
+            # History: daily
+            if now - times['last_history'] >= timedelta(days=1):
+                logging.info(f"Daily interval for user {user_id}. Running history task.")
+                run_history_task(user_id)
+                USER_SCHEDULE[user_id]['last_history'] = now
+            # Taste: weekly
+            if now - times['last_taste'] >= timedelta(days=7):
+                logging.info(f"Weekly interval for user {user_id}. Running taste task.")
+                run_taste_task(user_id)
+                USER_SCHEDULE[user_id]['last_taste'] = now
+            # Monthly
+            if now - times['last_monthly'] >= timedelta(days=30):
+                logging.info(f"Monthly interval for user {user_id}. Running monthly recs.")
+                run_monthly_task(user_id)
+                USER_SCHEDULE[user_id]['last_monthly'] = now
 
-# Schedule the process_current_user_tasks to run every minute
+
 scheduler = BackgroundScheduler()
-scheduler.add_job(process_current_user_tasks, IntervalTrigger(minutes=1))
+scheduler.add_job(process_all_users, IntervalTrigger(minutes=1))
 scheduler.start()
 
 @app.on_event("startup")
 def startup_event():
-    logging.info("Application startup: running initial user tasks...")
-    process_current_user_tasks()
+    logging.info("Application startup: running initial tasks for all users from plexauthgui.")
+    # run once
+    process_all_users()
 
 @app.on_event("shutdown")
 def shutdown_event():
@@ -277,6 +296,7 @@ def ai_search(request: AISearchRequest):
     return {"user_id": request.user_id, "search_results": results}
 
 
+# דוגמה לפונקציה שמבצעת Add to watchlist דרך PlexAuthClient (אם זה נחוץ)
 def add_to_plex_watchlist(user_id: str, imdb_id: str, media_type: str):
     """
     Connects to Plex using PlexAuthClient to obtain a token and calls a custom Plex endpoint
@@ -293,6 +313,7 @@ def add_to_plex_watchlist(user_id: str, imdb_id: str, media_type: str):
     if not token:
         logging.error(f"No token received for user {user_id}")
         return {"status": "Failed", "message": "No Plex token received."}
+
     plex_server_url = os.environ.get("PLEX_SERVER_URL")
     if not plex_server_url:
         logging.error("PLEX_SERVER_URL not configured.")
