@@ -8,6 +8,8 @@ from pydantic import BaseModel
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from datetime import datetime, timedelta
+from auth_client import PlexAuthClient
+
 
 # Import modules from the project
 from db import Database
@@ -17,8 +19,6 @@ from rec import (
     generate_discovery_recommendations,
     get_ai_search_results
 )
-from config import OVERSEERR_URL  # If you still need Overseerr for notifications or watchlist
-# from config import OVERSEERR_API_TOKEN  # Uncomment if needed for other calls
 
 # Configure logging
 logging.basicConfig(
@@ -276,50 +276,51 @@ def ai_search(request: AISearchRequest):
     logging.info(f"AI search executed for user {request.user_id}.")
     return {"user_id": request.user_id, "search_results": results}
 
-@app.post("/send_notification")
-def send_notification(notification: NotificationRequest):
-    logging.info(f"Sending notification for user {notification.user_id}")
-    overseerr_url = os.environ.get("OVERSEERR_URL")
-    if not overseerr_url:
-        logging.error("Overseerr URL not configured.")
-        raise HTTPException(status_code=500, detail="Overseerr URL not configured.")
-    
+
+def add_to_plex_watchlist(user_id: str, imdb_id: str, media_type: str):
+    """
+    Connects to Plex using PlexAuthClient to obtain a token and calls a custom Plex endpoint
+    to add the specified content to the user's watchlist.
+    """
+    auth_client = PlexAuthClient()  # PlexAuthClient defined in auth_client.py (using requests)
+    # Request connection to Plex to obtain token (this mimics previous logic)
+    data = {"user_id": user_id, "type": "account"}
+    response = requests.post(f"{auth_client.base_url}/connect", json=data)
+    if response.status_code != 200:
+        logging.error(f"Failed to obtain Plex token for user {user_id}")
+        return {"status": "Failed", "message": "Could not obtain Plex token."}
+    token = response.json().get("token")
+    if not token:
+        logging.error(f"No token received for user {user_id}")
+        return {"status": "Failed", "message": "No Plex token received."}
+    plex_server_url = os.environ.get("PLEX_SERVER_URL")
+    if not plex_server_url:
+        logging.error("PLEX_SERVER_URL not configured.")
+        return {"status": "Failed", "message": "PLEX_SERVER_URL not configured."}
+    # Construct the custom endpoint URL to add to watchlist
+    url = f"{plex_server_url}/api/watchlist/add?X-Plex-Token={token}"
     payload = {
-        "user_id": notification.user_id,
-        "title": notification.title,
-        "message": notification.message,
-        "image_url": notification.image_url
+         "imdb_id": imdb_id,
+         "media_type": media_type
     }
     try:
-        resp = requests.post(f"{overseerr_url}/api/v1/notifications", json=payload, timeout=10)
-        resp.raise_for_status()
-        logging.info(f"Notification sent for user {notification.user_id}")
-        return {"status": "OK", "response": resp.json()}
+         r = requests.post(url, json=payload, timeout=10)
+         r.raise_for_status()
+         logging.info(f"Successfully added imdb_id {imdb_id} to watchlist for user {user_id} on Plex server.")
+         return {"status": "OK", "response": r.json()}
     except Exception as e:
-        logging.error(f"Notification error for user {notification.user_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Notification error: {e}")
+         logging.error(f"Error adding to Plex watchlist for user {user_id}: {e}")
+         return {"status": "Failed", "message": str(e)}
 
 @app.post("/add_to_watchlist")
 def add_to_watchlist(request: WatchlistRequest):
-    logging.info(f"Adding content {request.imdb_id} to watchlist for user {request.user_id}")
-    overseerr_url = os.environ.get("OVERSEERR_URL")
-    if not overseerr_url:
-        logging.error("Overseerr URL not configured.")
-        raise HTTPException(status_code=500, detail="Overseerr URL not configured.")
-    
-    payload = {
-        "user_id": request.user_id,
-        "imdb_id": request.imdb_id,
-        "media_type": request.media_type
-    }
-    try:
-        resp = requests.post(f"{overseerr_url}/api/v1/plex/watchlist", json=payload, timeout=10)
-        resp.raise_for_status()
-        logging.info(f"Content {request.imdb_id} added to watchlist for user {request.user_id}")
-        return {"status": "OK", "response": resp.json()}
-    except Exception as e:
-        logging.error(f"Error adding to watchlist for user {request.user_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Error adding to watchlist: {e}")
+    logging.info(f"Adding content {request.imdb_id} to Plex watchlist for user {request.user_id}")
+    result = add_to_plex_watchlist(request.user_id, request.imdb_id, request.media_type)
+    if result.get("status") == "OK":
+        return {"status": "OK", "message": f"Content {request.imdb_id} added to Plex watchlist for user {request.user_id}."}
+    else:
+        logging.error(f"Failed to add content {request.imdb_id} to Plex watchlist: {result.get('message')}")
+        raise HTTPException(status_code=500, detail=f"Error adding to Plex watchlist: {result.get('message')}")
 
 if __name__ == "__main__":
     uvicorn.run("app:app", host="0.0.0.0", port=int(os.environ.get("PORT", 5335)), reload=True)
