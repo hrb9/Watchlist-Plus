@@ -23,8 +23,6 @@ services:
     container_name: plexauthgui
     ports:
       - "5332:5332"
-    volumes:
-      - ./PlexAuthGUI/db:/app/db
     environment:
       RECBYHISTORY_URL: "http://recbyhistory:5335"
       GEMINI_API_KEY: "your_gemini_key_here"
