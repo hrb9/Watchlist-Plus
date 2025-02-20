@@ -7,6 +7,8 @@ from pydantic import BaseModel
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from rec import print_history_groups, generate_discovery_recommendations, get_ai_search_results
+from db import Database
+from get_history import PlexHistory
 
 
 # Import existing modules from the project
@@ -292,7 +294,6 @@ def scheduled_generate_monthly_recs():
     """
     Generates monthly recommendations for all users from Overseerr (monthly).
     """
-    from config import OVERSEERR_URL, OVERSEERR_API_TOKEN
     try:
         response = requests.get(f"{OVERSEERR_URL}/api/v1/users", headers={"Authorization": f"Bearer {OVERSEERR_API_TOKEN}"}, timeout=10)
         response.raise_for_status()

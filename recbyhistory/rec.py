@@ -213,3 +213,64 @@ def get_ai_search_results(query: str, system_instruction: str):
         config=config,
     )
     return response.text
+
+def generate_discovery_recommendations(user_id: str, gemini_api_key: str, tmdb_api_key: str, num_movies: int, num_series: int, extra_elements: str):
+    """
+    Generates "Discovery" recommendations for the given user.
+    It fetches the user's watch history from the DB, retrieves the latest user taste,
+    and builds a prompt including extra elements. It then uses the Gemini AI model to generate recommendations.
+    The recommendations are filtered to exclude items already in the watch history.
+    The final recommendations are saved in the DB under group_id "discovery" and returned.
+    """
+    db = Database(user_id)
+    
+    # Retrieve watch history text from the DB
+    items = db.get_all_items()
+    user_history_text = ""
+    for row in items:
+        user_history_text += f"Watch History - Title: {row[1]}, IMDB ID: {row[2]}, User Rating: {row[3]}\n"
+    
+    taste = db.get_latest_user_taste(user_id) or ""
+    
+    system_instruction = (
+        "You will receive a user's complete watch history, a description of the user's taste, "
+        "and additional 'discovery' elements to consider.\n\n"
+        f"User Taste: {taste}\n"
+        f"Discovery Elements: {extra_elements}\n\n"
+        f"{user_history_text}\n\n"
+        f"Your task is to recommend {num_movies} movies and {num_series} TV series that the user will enjoy. "
+        "Do NOT recommend items that appear in the watch history. "
+        "Return the recommendations as a JSON array with objects containing 'title', 'imdb_id', and 'image_url'."
+    )
+    
+    os.environ["GEMINI_API_KEY"] = gemini_api_key
+    os.environ["TMDB_API_KEY"] = tmdb_api_key
+    
+    config = GenerateContentConfig(
+        system_instruction=system_instruction,
+        temperature=1,
+        top_p=0.95,
+        top_k=40,
+        max_output_tokens=8192,
+        response_mime_type="text/plain",
+        tools=[google_search_tool],
+    )
+    response = client.models.generate_content(
+        contents="",
+        model="gemini-2.0-flash-exp",
+        config=config,
+    )
+    raw_output = response.text
+    cleaned_text = clean_json_output(raw_output)
+    try:
+        recommendations = json.loads(cleaned_text)
+    except json.JSONDecodeError as je:
+        print("Error parsing JSON from AI recommendations:", je)
+        recommendations = []
+    
+    updated_recommendations = update_recommendations_with_images(recommendations)
+    watched_imdbs = {row[2] for row in items}
+    final_recs = [r for r in updated_recommendations if r.get("imdb_id") not in watched_imdbs]
+    
+    db.add_recommendation("discovery", "Discovery Recommendations", "mixed", json.dumps(final_recs, ensure_ascii=False))
+    return final_recs
