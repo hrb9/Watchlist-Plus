@@ -2,6 +2,7 @@
 import os
 import uvicorn
 import requests
+import logging
 from fastapi import FastAPI, Header, HTTPException, Depends
 from pydantic import BaseModel
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -16,6 +17,13 @@ from rec import (
     get_ai_search_results
 )
 from config import OVERSEERR_URL, OVERSEERR_API_TOKEN
+
+# Configure logging to display INFO-level messages
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S"
+)
 
 app = FastAPI(
     title="RecByHistory",
@@ -60,14 +68,13 @@ class WatchlistRequest(BaseModel):
 async def verify_overseerr_token(x_overseerr_token: str = Header(...)):
     expected_token = os.environ.get("OVERSEERR_API_TOKEN")
     if not expected_token or x_overseerr_token != expected_token:
+        logging.error("Invalid Overseerr token provided.")
         raise HTTPException(status_code=401, detail="Invalid Overseerr Token")
     return x_overseerr_token
 
 # ----------------- Scheduled Task Functions -----------------
 def scheduled_update_history():
-    """
-    Updates watch history for all users from Overseerr (daily).
-    """
+    logging.info("Starting daily watch history update...")
     try:
         response = requests.get(
             f"{OVERSEERR_URL}/api/v1/users",
@@ -75,26 +82,28 @@ def scheduled_update_history():
             timeout=10
         )
         response.raise_for_status()
-        users = response.json()  # Expecting list of users with 'id' field
+        users = response.json()  # Expecting a list of user objects with 'id' field
+        logging.info(f"Fetched {len(users)} users from Overseerr.")
     except Exception as e:
-        print(f"Error fetching users from Overseerr: {e}")
+        logging.error(f"Error fetching users from Overseerr: {e}")
         return
 
     for user in users:
         user_id = str(user.get("id"))
         if user_id:
-            db = Database(user_id)
-            plex = PlexHistory(user_id)
-            plex.get_watch_history(db)
-            print(f"Updated history for user {user_id}")
+            try:
+                db = Database(user_id)
+                plex = PlexHistory(user_id)
+                plex.get_watch_history(db)
+                logging.info(f"Updated history for user {user_id}")
+            except Exception as e:
+                logging.error(f"Error updating history for user {user_id}: {e}")
         else:
-            print("User missing id; skipping.")
-    print("Daily watch history update completed.")
+            logging.warning("User missing id; skipping.")
+    logging.info("Daily watch history update completed.")
 
 def scheduled_update_user_taste():
-    """
-    Updates user taste for all users from Overseerr (weekly).
-    """
+    logging.info("Starting weekly user taste update...")
     try:
         response = requests.get(
             f"{OVERSEERR_URL}/api/v1/users",
@@ -103,8 +112,9 @@ def scheduled_update_user_taste():
         )
         response.raise_for_status()
         users = response.json()
+        logging.info(f"Fetched {len(users)} users from Overseerr for taste update.")
     except Exception as e:
-        print(f"Error fetching users from Overseerr: {e}")
+        logging.error(f"Error fetching users from Overseerr: {e}")
         return
 
     for user in users:
@@ -112,21 +122,20 @@ def scheduled_update_user_taste():
         gemini_api_key = os.environ.get("GEMINI_API_KEY")
         tmdb_api_key = os.environ.get("TMDB_API_KEY")
         if user_id and gemini_api_key and tmdb_api_key:
-            # Set environment for the current iteration
-            os.environ["GEMINI_API_KEY"] = gemini_api_key
-            os.environ["TMDB_API_KEY"] = tmdb_api_key
-
-            db = Database(user_id)
-            print_history_groups(db)
-            print(f"Updated user taste for user {user_id}")
+            try:
+                os.environ["GEMINI_API_KEY"] = gemini_api_key
+                os.environ["TMDB_API_KEY"] = tmdb_api_key
+                db = Database(user_id)
+                print_history_groups(db)
+                logging.info(f"Updated user taste for user {user_id}")
+            except Exception as e:
+                logging.error(f"Error updating taste for user {user_id}: {e}")
         else:
-            print(f"Skipping user {user_id} due to missing credentials or id.")
-    print("Weekly user taste update completed.")
+            logging.warning(f"Skipping user {user_id} due to missing credentials or id.")
+    logging.info("Weekly user taste update completed.")
 
 def scheduled_generate_monthly_recs():
-    """
-    Generates monthly recommendations for all users from Overseerr (monthly).
-    """
+    logging.info("Starting monthly recommendations generation...")
     try:
         response = requests.get(
             f"{OVERSEERR_URL}/api/v1/users",
@@ -135,8 +144,9 @@ def scheduled_generate_monthly_recs():
         )
         response.raise_for_status()
         users = response.json()
+        logging.info(f"Fetched {len(users)} users from Overseerr for monthly recommendations.")
     except Exception as e:
-        print(f"Error fetching users from Overseerr: {e}")
+        logging.error(f"Error fetching users from Overseerr: {e}")
         return
 
     for user in users:
@@ -144,15 +154,17 @@ def scheduled_generate_monthly_recs():
         gemini_api_key = os.environ.get("GEMINI_API_KEY")
         tmdb_api_key = os.environ.get("TMDB_API_KEY")
         if user_id and gemini_api_key and tmdb_api_key:
-            os.environ["GEMINI_API_KEY"] = gemini_api_key
-            os.environ["TMDB_API_KEY"] = tmdb_api_key
-
-            db = Database(user_id)
-            print_history_groups(db)
-            print(f"Generated monthly recommendations for user {user_id}")
+            try:
+                os.environ["GEMINI_API_KEY"] = gemini_api_key
+                os.environ["TMDB_API_KEY"] = tmdb_api_key
+                db = Database(user_id)
+                print_history_groups(db)
+                logging.info(f"Generated monthly recommendations for user {user_id}")
+            except Exception as e:
+                logging.error(f"Error generating monthly recommendations for user {user_id}: {e}")
         else:
-            print(f"Skipping user {user_id} due to missing credentials or id.")
-    print("Monthly recommendations generation completed.")
+            logging.warning(f"Skipping user {user_id} due to missing credentials or id.")
+    logging.info("Monthly recommendations generation completed.")
 
 # Initialize scheduler and schedule tasks
 scheduler = BackgroundScheduler()
@@ -164,24 +176,24 @@ scheduler.start()
 # ----------------- Startup Event (First-Time Run) -----------------
 @app.on_event("startup")
 def startup_event():
-    """
-    On first startup, run the scheduled tasks immediately.
-    """
-    print("Running initial scheduled tasks on startup...")
-    scheduled_update_history()
-    scheduled_update_user_taste()
-    scheduled_generate_monthly_recs()
+    logging.info("Application startup: running initial tasks...")
+    try:
+        scheduled_update_history()
+        scheduled_update_user_taste()
+        scheduled_generate_monthly_recs()
+        logging.info("Initial scheduled tasks completed successfully.")
+    except Exception as e:
+        logging.error(f"Error during startup tasks: {e}")
 
 @app.on_event("shutdown")
 def shutdown_event():
     scheduler.shutdown()
+    logging.info("Application shutdown: scheduler stopped.")
 
 # ----------------- Endpoints -----------------
 @app.post("/init", dependencies=[Depends(verify_overseerr_token)])
 def init_data(request: InitRequest):
-    """
-    Initialize the DB, import Plex watch history, and generate monthly recommendations.
-    """
+    logging.info(f"Received init request for user {request.user_id}")
     os.environ["GEMINI_API_KEY"] = request.gemini_api_key
     os.environ["TMDB_API_KEY"] = request.tmdb_api_key
 
@@ -212,20 +224,19 @@ def init_data(request: InitRequest):
                     resolution=ep.get('resolution', "Unknown")
                 )
 
-    # Temporarily set the number of recommendations for monthly suggestions
     from rec import NUM_MOVIES, NUM_SERIES
     NUM_MOVIES = request.monthly_movies
     NUM_SERIES = request.monthly_series
 
-    # Generate monthly recommendations and update DB
     print_history_groups(db)
-    
+    logging.info("Init process completed successfully.")
     return {"status": "OK", "message": "DB, history, and monthly recommendations created."}
 
 @app.get("/taste", dependencies=[Depends(verify_overseerr_token)])
 def get_user_taste_endpoint(user_id: str):
     db = Database(user_id)
     taste = db.get_latest_user_taste(user_id)
+    logging.info(f"Retrieved taste for user {user_id}: {taste}")
     return {"user_id": user_id, "taste": taste}
 
 @app.get("/history", dependencies=[Depends(verify_overseerr_token)])
@@ -242,6 +253,7 @@ def get_user_history(user_id: str):
             "resolution": row[4],
             "added_at": row[5]
         })
+    logging.info(f"Returning history for user {user_id} with {len(results)} items.")
     return {"user_id": user_id, "history": results}
 
 @app.get("/monthly_recommendations", dependencies=[Depends(verify_overseerr_token)])
@@ -260,10 +272,12 @@ def get_monthly_recommendations(user_id: str):
             "image_url": row[4],
             "created_at": row[5]
         })
+    logging.info(f"Returning monthly recommendations for user {user_id}.")
     return {"user_id": user_id, "monthly_recommendations": recs}
 
 @app.post("/discovery_recommendations", dependencies=[Depends(verify_overseerr_token)])
 def post_discovery_recommendations(request: DiscoveryRequest):
+    logging.info(f"Received discovery recommendations request for user {request.user_id}")
     final_recs = generate_discovery_recommendations(
         user_id=request.user_id,
         gemini_api_key=request.gemini_api_key,
@@ -272,13 +286,13 @@ def post_discovery_recommendations(request: DiscoveryRequest):
         num_series=request.num_series,
         extra_elements=request.extra_elements
     )
+    logging.info("Discovery recommendations generated and pushed to Overseerr.")
     return {"discovery_recommendations": final_recs}
 
 @app.post("/ai_search", dependencies=[Depends(verify_overseerr_token)])
 def ai_search(request: AISearchRequest):
     db = Database(request.user_id)
     user_taste = db.get_latest_user_taste(request.user_id) or "No user taste available."
-    
     system_instruction = (
         "Perform a search based on the following query and user taste.\n"
         "Query: " + request.query + "\n"
@@ -286,12 +300,15 @@ def ai_search(request: AISearchRequest):
         "Return results in JSON format with keys: 'title', 'imdb_id', 'image_url'."
     )
     results = get_ai_search_results(request.query, system_instruction)
+    logging.info(f"AI search executed for user {request.user_id}.")
     return {"user_id": request.user_id, "search_results": results}
 
 @app.post("/send_notification", dependencies=[Depends(verify_overseerr_token)])
 def send_notification(notification: NotificationRequest):
+    logging.info(f"Sending notification for user {notification.user_id}")
     overseerr_url = os.environ.get("OVERSEERR_URL")
     if not overseerr_url:
+        logging.error("Overseerr URL not configured.")
         raise HTTPException(status_code=500, detail="Overseerr URL not configured.")
     
     payload = {
@@ -303,17 +320,18 @@ def send_notification(notification: NotificationRequest):
     try:
         resp = requests.post(f"{overseerr_url}/api/v1/notifications", json=payload, timeout=10)
         resp.raise_for_status()
+        logging.info(f"Notification sent for user {notification.user_id}")
         return {"status": "OK", "response": resp.json()}
     except Exception as e:
+        logging.error(f"Notification error for user {notification.user_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Notification error: {e}")
 
 @app.post("/add_to_watchlist", dependencies=[Depends(verify_overseerr_token)])
 def add_to_watchlist(request: WatchlistRequest):
-    """
-    Adds a content item to the Plex watchlist for the given user using Overseerr's built-in mechanism.
-    """
+    logging.info(f"Adding content {request.imdb_id} to watchlist for user {request.user_id}")
     overseerr_url = os.environ.get("OVERSEERR_URL")
     if not overseerr_url:
+        logging.error("Overseerr URL not configured.")
         raise HTTPException(status_code=500, detail="Overseerr URL not configured.")
     
     payload = {
@@ -324,8 +342,10 @@ def add_to_watchlist(request: WatchlistRequest):
     try:
         resp = requests.post(f"{overseerr_url}/api/v1/plex/watchlist", json=payload, timeout=10)
         resp.raise_for_status()
+        logging.info(f"Content {request.imdb_id} added to watchlist for user {request.user_id}")
         return {"status": "OK", "response": resp.json()}
     except Exception as e:
+        logging.error(f"Error adding to watchlist for user {request.user_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Error adding to watchlist: {e}")
 
 if __name__ == "__main__":
