@@ -6,17 +6,13 @@ import logging
 from fastapi import FastAPI, Header, HTTPException, Depends
 from pydantic import BaseModel
 from apscheduler.schedulers.background import BackgroundScheduler
-from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
+from datetime import datetime, timedelta
 
 # Import modules from the project.
-# Note: PlexHistory (from get_history.py) uses OverseerrPlexClient from overseerr_auth.py
 from db import Database
 from get_history import PlexHistory
-from rec import (
-    print_history_groups,
-    generate_discovery_recommendations,
-    get_ai_search_results
-)
+from rec import print_history_groups, generate_discovery_recommendations, get_ai_search_results
 from config import OVERSEERR_URL, OVERSEERR_API_TOKEN
 
 # Configure logging
@@ -73,100 +69,101 @@ async def verify_overseerr_token(x_overseerr_token: str = Header(...)):
         raise HTTPException(status_code=401, detail="Invalid Overseerr Token")
     return x_overseerr_token
 
-# ----------------- Helper Function to Fetch Plex Users from Overseerr -----------------
-def fetch_plex_users():
+# ----------------- Global Variables -----------------
+CURRENT_USER = None  # dict with keys: id, last_history, last_taste, last_monthly
+
+# ----------------- Helper Functions -----------------
+def check_auth_me():
     """
-    Uses the new Overseerr endpoint to get Plex settings for all users.
-    Expected endpoint: GET /api/v1/settings/plex/users
-    Returns a list of Plex user objects.
+    Calls the /auth/me endpoint to get the currently authenticated user.
     """
-    url = f"{OVERSEERR_URL}/api/v1/settings/plex/users"
+    url = f"{OVERSEERR_URL}/auth/me"
     try:
         response = requests.get(url, headers={"Authorization": f"Bearer {OVERSEERR_API_TOKEN}"}, timeout=10)
         response.raise_for_status()
-        plex_users = response.json()  # Expecting list of objects with "userId" (or "id") field
-        logging.info(f"Fetched {len(plex_users)} Plex user settings from Overseerr.")
-        return plex_users
+        user = response.json()
+        logging.info(f"/auth/me returned user: {user.get('id')} - {user.get('username')}")
+        return user
     except Exception as e:
-        logging.error(f"Error fetching Plex users from Overseerr: {e}")
-        return []
+        logging.error(f"Error calling /auth/me: {e}")
+        return None
 
-# ----------------- Scheduled Task Functions -----------------
-def scheduled_update_history():
-    logging.info("Starting daily watch history update...")
-    plex_users = fetch_plex_users()
-    for plex_user in plex_users:
-        user_id = str(plex_user.get("userId") or plex_user.get("id"))
-        if user_id:
-            try:
-                db = Database(user_id)
-                plex = PlexHistory(user_id)
-                plex.get_watch_history(db)
-                logging.info(f"Updated history for user {user_id}")
-            except Exception as e:
-                logging.error(f"Error updating history for user {user_id}: {e}")
-        else:
-            logging.warning("User missing id in Plex settings; skipping.")
-    logging.info("Daily watch history update completed.")
+def run_history_task(user_id):
+    try:
+        db = Database(user_id)
+        plex = PlexHistory(user_id)
+        plex.get_watch_history(db)
+        logging.info(f"History task executed for user {user_id}.")
+    except Exception as e:
+        logging.error(f"Error in history task for user {user_id}: {e}")
 
-def scheduled_update_user_taste():
-    logging.info("Starting weekly user taste update...")
-    plex_users = fetch_plex_users()
-    for plex_user in plex_users:
-        user_id = str(plex_user.get("userId") or plex_user.get("id"))
-        gemini_api_key = os.environ.get("GEMINI_API_KEY")
-        tmdb_api_key = os.environ.get("TMDB_API_KEY")
-        if user_id and gemini_api_key and tmdb_api_key:
-            try:
-                os.environ["GEMINI_API_KEY"] = gemini_api_key
-                os.environ["TMDB_API_KEY"] = tmdb_api_key
-                db = Database(user_id)
-                print_history_groups(db)
-                logging.info(f"Updated user taste for user {user_id}")
-            except Exception as e:
-                logging.error(f"Error updating taste for user {user_id}: {e}")
-        else:
-            logging.warning(f"Skipping user {user_id} due to missing credentials or id.")
-    logging.info("Weekly user taste update completed.")
+def run_taste_task(user_id):
+    try:
+        db = Database(user_id)
+        print_history_groups(db)
+        logging.info(f"Taste task executed for user {user_id}.")
+    except Exception as e:
+        logging.error(f"Error in taste task for user {user_id}: {e}")
 
-def scheduled_generate_monthly_recs():
-    logging.info("Starting monthly recommendations generation...")
-    plex_users = fetch_plex_users()
-    for plex_user in plex_users:
-        user_id = str(plex_user.get("userId") or plex_user.get("id"))
-        gemini_api_key = os.environ.get("GEMINI_API_KEY")
-        tmdb_api_key = os.environ.get("TMDB_API_KEY")
-        if user_id and gemini_api_key and tmdb_api_key:
-            try:
-                os.environ["GEMINI_API_KEY"] = gemini_api_key
-                os.environ["TMDB_API_KEY"] = tmdb_api_key
-                db = Database(user_id)
-                print_history_groups(db)
-                logging.info(f"Generated monthly recommendations for user {user_id}")
-            except Exception as e:
-                logging.error(f"Error generating monthly recommendations for user {user_id}: {e}")
-        else:
-            logging.warning(f"Skipping user {user_id} due to missing credentials or id.")
-    logging.info("Monthly recommendations generation completed.")
+def run_monthly_task(user_id):
+    try:
+        db = Database(user_id)
+        print_history_groups(db)
+        logging.info(f"Monthly recommendations task executed for user {user_id}.")
+    except Exception as e:
+        logging.error(f"Error in monthly task for user {user_id}: {e}")
 
-# Initialize scheduler and schedule tasks
+def process_current_user_tasks():
+    """
+    Checks the currently authenticated user via /auth/me and, based on last-run timestamps,
+    executes the tasks for history, taste, and monthly recommendations.
+    """
+    global CURRENT_USER
+    user = check_auth_me()
+    if not user:
+        logging.info("No authenticated user returned from /auth/me.")
+        return
+
+    user_id = str(user.get("id"))
+    now = datetime.utcnow()
+
+    if CURRENT_USER is None or CURRENT_USER.get("id") != user_id:
+        logging.info(f"New user detected: {user_id}. Running all tasks immediately.")
+        CURRENT_USER = {
+            "id": user_id,
+            "last_history": now,
+            "last_taste": now,
+            "last_monthly": now
+        }
+        run_history_task(user_id)
+        run_taste_task(user_id)
+        run_monthly_task(user_id)
+    else:
+        # Check if sufficient time has passed for each task
+        if now - CURRENT_USER.get("last_history", now) >= timedelta(days=1):
+            logging.info(f"Daily interval reached for user {user_id}. Running history task.")
+            run_history_task(user_id)
+            CURRENT_USER["last_history"] = now
+        if now - CURRENT_USER.get("last_taste", now) >= timedelta(days=7):
+            logging.info(f"Weekly interval reached for user {user_id}. Running taste task.")
+            run_taste_task(user_id)
+            CURRENT_USER["last_taste"] = now
+        if now - CURRENT_USER.get("last_monthly", now) >= timedelta(days=30):
+            logging.info(f"Monthly interval reached for user {user_id}. Running monthly recommendations task.")
+            run_monthly_task(user_id)
+            CURRENT_USER["last_monthly"] = now
+
+# ----------------- Scheduler -----------------
 scheduler = BackgroundScheduler()
-scheduler.add_job(scheduled_update_history, CronTrigger(hour=2, minute=0))       # Daily at 02:00
-scheduler.add_job(scheduled_update_user_taste, CronTrigger(day_of_week='sun', hour=3, minute=0))  # Weekly on Sunday at 03:00
-scheduler.add_job(scheduled_generate_monthly_recs, CronTrigger(day=1, hour=4, minute=0))          # Monthly on the 1st at 04:00
+# Schedule the check_auth_me task every minute
+scheduler.add_job(process_current_user_tasks, IntervalTrigger(minutes=1))
 scheduler.start()
 
-# ----------------- Startup Event (First-Time Run) -----------------
+# ----------------- Startup and Shutdown Events -----------------
 @app.on_event("startup")
 def startup_event():
-    logging.info("Application startup: running initial scheduled tasks...")
-    try:
-        scheduled_update_history()
-        scheduled_update_user_taste()
-        scheduled_generate_monthly_recs()
-        logging.info("Initial scheduled tasks completed successfully.")
-    except Exception as e:
-        logging.error(f"Error during startup tasks: {e}")
+    logging.info("Application startup: running initial /auth/me check and tasks...")
+    process_current_user_tasks()
 
 @app.on_event("shutdown")
 def shutdown_event():
