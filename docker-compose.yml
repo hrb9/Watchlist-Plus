@@ -1,0 +1,32 @@
+version: '3.8'
+services:
+  recbyhistory:
+    image: ghcr.io/hrb9/watchlist-plus/recbyhistory:latest
+    container_name: recbyhistory
+    ports:
+      - "5335:5335"
+    environment:
+      GEMINI_API_KEY: "your_gemini_key_here"
+      TMDB_API_KEY: "your_tmdb_key_here"
+      OVERSEERR_API_TOKEN: "your_overseerr_token_here"
+      OVERSEERR_URL: "http://your_overseerr_url:5055"
+
+  auth_service:
+    image: ghcr.io/hrb9/watchlist-plus/auth_service:latest
+    container_name: auth_service
+    ports:
+      - "5333:5333"
+
+
+  plexauthgui:
+    image: ghcr.io/hrb9/watchlist-plus/plexauthgui:latest
+    container_name: plexauthgui
+    ports:
+      - "5332:5332"
+    volumes:
+      - ./PlexAuthGUI/db:/app/db
+    environment:
+      RECBYHISTORY_URL: "http://recbyhistory:5335"
+      GEMINI_API_KEY: "your_gemini_key_here"
+      TMDB_API_KEY: "your_tmdb_key_here"
+

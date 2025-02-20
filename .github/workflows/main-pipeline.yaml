@@ -1,4 +1,3 @@
-# .github/workflows/main-pipeline.yml
 name: main-pipeline
 
 permissions:
@@ -54,16 +53,29 @@ jobs:
           driver: docker-container
       
       - name: Build RecByHistory Docker Images for Multiple Architectures
-        working-directory: ${{ github.workspace }}
         run: |
           REPO=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
           VERSION=${{ steps.bump.outputs.version }}
       
           echo "Building RecByHistory image for amd64..."
-          docker buildx build --platform linux/amd64 --load -t ghcr.io/$REPO/recbyhistory:main-${VERSION}-amd64 -f recbyhistory/Dockerfile .
+          docker buildx build \
+            --platform linux/amd64 \
+            --load \
+            -t ghcr.io/$REPO/recbyhistory:main-${VERSION}-amd64 \
+            -f recbyhistory/Dockerfile .
       
           echo "Building RecByHistory image for arm64..."
-          docker buildx build --platform linux/arm64/v8 --load -t ghcr.io/$REPO/recbyhistory:main-${VERSION}-arm64 -f recbyhistory/Dockerfile .
+          docker buildx build \
+            --platform linux/arm64/v8 \
+            --load \
+            -t ghcr.io/$REPO/recbyhistory:main-${VERSION}-arm64 \
+            -f recbyhistory/Dockerfile .
       
           echo "Creating multi-architecture manifest image for RecByHistory and pushing..."
-          docker buildx build --platform linux/amd64,linux/arm64/v8 --push -t ghcr.io/$REPO/recbyhistory:main-${VERSION} -t ghcr.io/$REPO/recbyhistory:latest -f recbyhistory/Dockerfile .
+          docker buildx build \
+            --platform linux/amd64,linux/arm64/v8 \
+            --push \
+            -t ghcr.io/$REPO/recbyhistory:main-${VERSION} \
+            -t ghcr.io/$REPO/recbyhistory:latest \
+            -f recbyhistory/Dockerfile \
+            .
