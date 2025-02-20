@@ -61,15 +61,15 @@ jobs:
       
           echo "Building RecByHistory image for amd64..."
           docker buildx build --platform linux/amd64 --load -t ghcr.io/$REPO/recbyhistory:main-${VERSION}-amd64 -f recbyhistory/Dockerfile .
-          docker buildx build --platform linux/amd64 --load -t ghcr.io/$REPO/PlexAuthGUI:main-${VERSION}-amd64 -f PlexAuthGUI/Dockerfile .
+          docker buildx build --platform linux/amd64 --load -t ghcr.io/$REPO/plexauthgui:main-${VERSION}-amd64 -f plexauthgui/Dockerfile .
           docker buildx build --platform linux/amd64 --load -t ghcr.io/$REPO/auth_service:main-${VERSION}-amd64 -f auth_service/Dockerfile .
       
           echo "Building RecByHistory image for arm64..."
           docker buildx build --platform linux/arm64/v8 --load -t ghcr.io/$REPO/recbyhistory:main-${VERSION}-arm64 -f recbyhistory/Dockerfile .
-          docker buildx build --platform linux/arm64/v8 --load -t ghcr.io/$REPO/PlexAuthGUI:main-${VERSION}-arm64 -f PlexAuthGUI/Dockerfile .
+          docker buildx build --platform linux/arm64/v8 --load -t ghcr.io/$REPO/plexauthgui:main-${VERSION}-arm64 -f plexauthgui/Dockerfile .
           docker buildx build --platform linux/arm64/v8 --load -t ghcr.io/$REPO/auth_service:main-${VERSION}-arm64 -f auth_service/Dockerfile .
       
           echo "Creating multi-architecture manifest image for RecByHistory and pushing..."
           docker buildx build --platform linux/amd64,linux/arm64/v8 --push -t ghcr.io/$REPO/recbyhistory:main-${VERSION} -t ghcr.io/$REPO/recbyhistory:latest -f recbyhistory/Dockerfile .
-          docker buildx build --platform linux/amd64,linux/arm64/v8 --push -t ghcr.io/$REPO/PlexAuthGUI:main-${VERSION} -t ghcr.io/$REPO/PlexAuthGUI:latest -f PlexAuthGUI/Dockerfile .
+          docker buildx build --platform linux/amd64,linux/arm64/v8 --push -t ghcr.io/$REPO/plexauthgui:main-${VERSION} -t ghcr.io/$REPO/plexauthgui:latest -f plexauthgui/Dockerfile .
           docker buildx build --platform linux/amd64,linux/arm64/v8 --push -t ghcr.io/$REPO/auth_service:main-${VERSION} -t ghcr.io/$REPO/auth_service:latest -f auth_service/Dockerfile .
