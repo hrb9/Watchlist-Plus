@@ -21,3 +21,13 @@ services:
       GEMINI_API_KEY: "your_gemini_key_here"
       TMDB_API_KEY: "your_tmdb_key_here"
 
+  get_imdb_id:
+    image: ghcr.io/hrb9/watchlist-plus/getimdbid:latest
+    container_name: get_imdb_id
+    ports:
+      - "5331:5331"
+    environment:
+      RECBYHISTORY_URL: "http://getimdbid:5331"
+      GEMINI_API_KEY: "your_gemini_key_here"
+      TMDB_API_KEY: "your_tmdb_key_here"
+

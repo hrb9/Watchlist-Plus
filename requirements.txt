@@ -7,7 +7,7 @@ google-genai
 plexapi
 apscheduler
 flask
-
+imdbmovies
 
 
 
