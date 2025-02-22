@@ -11,13 +11,6 @@ services:
       OVERSEERR_API_TOKEN: "your_overseerr_token_here"
       OVERSEERR_URL: "http://your_overseerr_url:5055"
 
-  auth_service:
-    image: ghcr.io/hrb9/watchlist-plus/auth_service:latest
-    container_name: auth_service
-    ports:
-      - "5333:5333"
-
-
   plexauthgui:
     image: ghcr.io/hrb9/watchlist-plus/plexauthgui:latest
     container_name: plexauthgui

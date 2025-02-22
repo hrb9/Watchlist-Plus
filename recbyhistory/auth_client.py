@@ -2,7 +2,7 @@ import requests
 from plexapi.myplex import MyPlexAccount
 
 class PlexAuthClient:
-    def __init__(self, base_url="http://localhost:5333"):
+    def __init__(self, base_url="http://plexauthgui:5332"):
         """
         :param base_url: The base URL of the service providing the /connect endpoint.
                         For example, 'http://auth_service:5333' or 'http://plexauthgui:5332'
