@@ -2,7 +2,7 @@
 import logging
 from imdb_id_service import IMDBServiceClient
 from auth_client import PlexAuthClient
-base_url = os.environ.get("GETIMDB_URL", "http://get_imdb_id:5331")
+
 
 class PlexHistory:
     def __init__(self, user_id):
