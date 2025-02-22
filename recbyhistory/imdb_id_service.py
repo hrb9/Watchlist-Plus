@@ -4,7 +4,7 @@ import os
 base_url = os.environ.get("GETIMDB_URL", "http://get_imdb_id:5331")
 
 class IMDBServiceClient:
-    def __init__(self, base_url):
+    def __init__(self, base_url="http://get_imdb_id:5331"):
         self.base_url = base_url
     
     def get_imdb_id(self, plex_item):
