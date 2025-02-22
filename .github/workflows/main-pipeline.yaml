@@ -72,4 +72,4 @@ jobs:
           echo "Creating multi-architecture manifest image for WatchlistPlus Continers and pushing..."
           docker buildx build --platform linux/amd64,linux/arm64/v8 --push -t ghcr.io/$REPO/recbyhistory:main-${VERSION} -t ghcr.io/$REPO/recbyhistory:latest -f recbyhistory/Dockerfile .
           docker buildx build --platform linux/amd64,linux/arm64/v8 --push -t ghcr.io/$REPO/plexauthgui:main-${VERSION} -t ghcr.io/$REPO/plexauthgui:latest -f plexauthgui/Dockerfile .
-          docker buildx build --platform linux/amd64,linux/arm64/v8 --push -t ghcr.io/$REPO/get_imdb_id:main-${VERSION} -t ghcr.io/$REPO/get_imdb_id:latest -fget_imdb_id/Dockerfile .
+          docker buildx build --platform linux/amd64,linux/arm64/v8 --push -t ghcr.io/$REPO/get_imdb_id:main-${VERSION} -t ghcr.io/$REPO/get_imdb_id:latest -f get_imdb_id/Dockerfile .
