@@ -57,4 +57,5 @@ def get_imdb_id():
     return jsonify({"imdb_id": synthetic_id})
 
 if __name__ == '__main__':
-    app.run(port=5331)
+    # Host=0.0.0.0 so that it is accessible from other containers (not just localhost).
+    app.run(host='0.0.0.0', port=5331, debug=True)
