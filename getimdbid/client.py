@@ -1,7 +1,7 @@
 import requests
 
 class IMDBServiceClient:
-    def __init__(self, base_url="http:/getimdbid:5331"):
+    def __init__(self, base_url="http://getimdbid:5331"):
         self.base_url = base_url
     
     def get_imdb_id(self, plex_item):
