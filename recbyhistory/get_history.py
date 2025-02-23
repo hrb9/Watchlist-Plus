@@ -4,6 +4,7 @@ from imdb_id_service import IMDBServiceClient
 from auth_client import PlexAuthClient
 
 
+
 class PlexHistory:
     def __init__(self, user_id):
         self.imdb_service = IMDBServiceClient()
@@ -80,9 +81,9 @@ class PlexHistory:
                         # רק אם נצפה
                         if item.isWatched:
                             print(item.title)  # debug
-                            if not imdb_id:
+                            #if not imdb_id:
                                 # אם אין imdb_id, ממשיכים
-                                continue
+                                #continue
 
                             if item.type == 'episode':
                                 try:
