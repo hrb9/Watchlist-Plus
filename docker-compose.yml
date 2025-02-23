@@ -27,7 +27,6 @@ services:
     ports:
       - "5331:5331"
     environment:
-      RECBYHISTORY_URL: "http://getimdbid:5331"
       GEMINI_API_KEY: "your_gemini_key_here"
       TMDB_API_KEY: "your_tmdb_key_here"
 

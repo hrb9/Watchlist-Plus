@@ -4,11 +4,13 @@ import os
 import uvicorn
 import requests
 import logging
+from datetime import datetime, timedelta
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
-from datetime import datetime, timedelta
 
 # Import modules from the project
 from db import Database
@@ -25,12 +27,6 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S"
-)
-
-app = FastAPI(
-    title="RecByHistory",
-    description="A recommendation engine based on user watch history using PlexAuthClient for Plex authentication.",
-    version="1.0"
 )
 
 # ----------------- Request Models -----------------
@@ -66,13 +62,13 @@ class WatchlistRequest(BaseModel):
     imdb_id: str
     media_type: str  # e.g., "movie" or "series"
 
-
 # ----------------- Scheduled Task Functions -----------------
 def run_history_task(user_id: str):
     """
-    Runs the daily watch history update for the given user ID.
+    מריץ עדכון היסטוריית צפייה יומית למשתמש.
     """
     try:
+        
         db = Database(user_id)
         plex = PlexHistory(user_id)
         plex.get_watch_history(db)
@@ -82,7 +78,7 @@ def run_history_task(user_id: str):
 
 def run_taste_task(user_id: str):
     """
-    Runs the weekly taste update for the given user ID.
+    מריץ עדכון 'טעם' שבועי למשתמש.
     """
     try:
         db = Database(user_id)
@@ -93,7 +89,7 @@ def run_taste_task(user_id: str):
 
 def run_monthly_task(user_id: str):
     """
-    Runs the monthly recommendations generation for the given user ID.
+    מריץ יצירת המלצות חודשיות למשתמש.
     """
     try:
         db = Database(user_id)
@@ -102,13 +98,12 @@ def run_monthly_task(user_id: str):
     except Exception as e:
         logging.error(f"Error in monthly task for user {user_id}: {e}")
 
-
 # גלובלי: נזכור מתי בפעם האחרונה הרצנו משימות לכל user_id
 USER_SCHEDULE = {}
 
 def get_all_users_from_plexauth():
     """
-    Calls the plexauthgui service (which also acts like auth_service) to retrieve all users.
+    שולף את רשימת המשתמשים משירות plexauthgui.
     נניח שיש אנדפוינט /users שמחזיר JSON כמו: { 'users': [ 'user_xxx', 'user_yyy' ] }
     """
     plexauth_url = os.environ.get("PLEXAUTH_URL", "http://plexauthgui:5332")
@@ -123,8 +118,8 @@ def get_all_users_from_plexauth():
 
 def process_all_users():
     """
-    רץ בכל דקה (IntervalTrigger). שולף את רשימת המשתמשים מ־plexauthgui, 
-    ומריץ לכל משתמש את המשימות (היסטוריה, טעם, המלצות) על פי לוחות זמנים: יום, שבוע, חודש.
+    רץ כל דקה (באמצעות IntervalTrigger). שולף את רשימת המשתמשים מ־plexauthgui,
+    ומריץ עבור כל משתמש את המשימות (היסטוריה, טעם, המלצות) בהתאם ללוח הזמנים.
     """
     global USER_SCHEDULE
 
@@ -163,27 +158,35 @@ def process_all_users():
                 run_monthly_task(user_id)
                 USER_SCHEDULE[user_id]['last_monthly'] = now
 
-
-scheduler = BackgroundScheduler()
-scheduler.add_job(process_all_users, IntervalTrigger(minutes=1))
-scheduler.start()
-
-@app.on_event("startup")
-def startup_event():
+# ----------------- Lifespan Event Handler -----------------
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # יצירת Scheduler והוספת משימה
+    scheduler = BackgroundScheduler()
+    scheduler.add_job(process_all_users, IntervalTrigger(minutes=1))
+    scheduler.start()
     logging.info("Application startup: running initial tasks for all users from plexauthgui.")
-    # run once
+    # הרצה ראשונית של המשימות
     process_all_users()
+    try:
+        yield
+    finally:
+        scheduler.shutdown()
+        logging.info("Application shutdown: scheduler stopped.")
 
-@app.on_event("shutdown")
-def shutdown_event():
-    scheduler.shutdown()
-    logging.info("Application shutdown: scheduler stopped.")
+# יצירת האפליקציה עם lifespan
+app = FastAPI(
+    title="RecByHistory",
+    description="A recommendation engine based on user watch history using PlexAuthClient for Plex authentication.",
+    version="1.0",
+    lifespan=lifespan
+)
 
 # ----------------- Endpoints -----------------
 @app.post("/init")
 def init_data(request: InitRequest):
     """
-    Initialize DB, load Plex watch history, and generate monthly recommendations for the user.
+    מאתחל את מסד הנתונים, טוען את היסטוריית הצפייה ומייצר המלצות חודשיות למשתמש.
     """
     logging.info(f"Received init request for user {request.user_id}")
     os.environ["GEMINI_API_KEY"] = request.gemini_api_key
@@ -194,20 +197,13 @@ def init_data(request: InitRequest):
     history = plex.get_watch_history(db)
 
     for item in history:
-        if 'episodes' not in item:
-            db.add_item(
-                title=item['title'],
-                imdb_id=item['imdbID'],
-                user_rating=item['userRating'],
-                resolution=item.get('resolution', "Unknown")
-            )
-        else:
-            db.add_item(
-                title=item['title'],
-                imdb_id=item['imdbID'],
-                user_rating=item['userRating'],
-                resolution=item.get('resolution', "Unknown")
-            )
+        db.add_item(
+            title=item['title'],
+            imdb_id=item['imdbID'],
+            user_rating=item['userRating'],
+            resolution=item.get('resolution', "Unknown")
+        )
+        if 'episodes' in item:
             for ep in item['episodes']:
                 db.add_item(
                     title=ep['title'],
@@ -295,15 +291,12 @@ def ai_search(request: AISearchRequest):
     logging.info(f"AI search executed for user {request.user_id}.")
     return {"user_id": request.user_id, "search_results": results}
 
-
-# דוגמה לפונקציה שמבצעת Add to watchlist דרך PlexAuthClient (אם זה נחוץ)
+# פונקציה להוספת תוכן ל-watchlist דרך PlexAuthClient
 def add_to_plex_watchlist(user_id: str, imdb_id: str, media_type: str):
     """
-    Connects to Plex using PlexAuthClient to obtain a token and calls a custom Plex endpoint
-    to add the specified content to the user's watchlist.
+    מתחבר ל-Plex באמצעות PlexAuthClient לקבלת טוקן וקורא לאנדפוינט מותאם אישית להוספת התוכן ל-watchlist.
     """
-    auth_client = PlexAuthClient()  # PlexAuthClient defined in auth_client.py (using requests)
-    # Request connection to Plex to obtain token (this mimics previous logic)
+    auth_client = PlexAuthClient()
     data = {"user_id": user_id, "type": "account"}
     response = requests.post(f"{auth_client.base_url}/connect", json=data)
     if response.status_code != 200:
@@ -318,7 +311,6 @@ def add_to_plex_watchlist(user_id: str, imdb_id: str, media_type: str):
     if not plex_server_url:
         logging.error("PLEX_SERVER_URL not configured.")
         return {"status": "Failed", "message": "PLEX_SERVER_URL not configured."}
-    # Construct the custom endpoint URL to add to watchlist
     url = f"{plex_server_url}/api/watchlist/add?X-Plex-Token={token}"
     payload = {
          "imdb_id": imdb_id,

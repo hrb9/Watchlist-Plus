@@ -69,6 +69,7 @@ class PlexAuthClient:
                         servers.append(server)
                 except Exception as e:
                     print(f"Error connecting to server {resource.name}: {e}")
+                    continue
             return servers
         
         # If not status_code 200, or some error
