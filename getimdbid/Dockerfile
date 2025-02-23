@@ -5,7 +5,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY get_imdb_id/ .
+COPY getimdbid/ .
 
 
 EXPOSE 5331

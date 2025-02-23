@@ -62,14 +62,14 @@ jobs:
           echo "Building WatchlistPlus Continers image for amd64..."
           docker buildx build --platform linux/amd64 --load -t ghcr.io/$REPO/recbyhistory:main-${VERSION}-amd64 -f recbyhistory/Dockerfile .
           docker buildx build --platform linux/amd64 --load -t ghcr.io/$REPO/plexauthgui:main-${VERSION}-amd64 -f plexauthgui/Dockerfile .
-          docker buildx build --platform linux/amd64 --load -t ghcr.io/$REPO/get_imdb_id:main-${VERSION}-amd64 -f get_imdb_id/Dockerfile .
+          docker buildx build --platform linux/amd64 --load -t ghcr.io/$REPO/get_imdb_id:main-${VERSION}-amd64 -f getimdbid/Dockerfile .
       
           echo "Building WatchlistPlus Continers image for arm64..."
           docker buildx build --platform linux/arm64/v8 --load -t ghcr.io/$REPO/recbyhistory:main-${VERSION}-arm64 -f recbyhistory/Dockerfile .
           docker buildx build --platform linux/arm64/v8 --load -t ghcr.io/$REPO/plexauthgui:main-${VERSION}-arm64 -f plexauthgui/Dockerfile .
-          docker buildx build --platform linux/arm64/v8 --load -t ghcr.io/$REPO/get_imdb_id:main-${VERSION}-arm64 -f get_imdb_id/Dockerfile .
+          docker buildx build --platform linux/arm64/v8 --load -t ghcr.io/$REPO/get_imdb_id:main-${VERSION}-arm64 -f getimdbid/Dockerfile .
       
           echo "Creating multi-architecture manifest image for WatchlistPlus Continers and pushing..."
           docker buildx build --platform linux/amd64,linux/arm64/v8 --push -t ghcr.io/$REPO/recbyhistory:main-${VERSION} -t ghcr.io/$REPO/recbyhistory:latest -f recbyhistory/Dockerfile .
           docker buildx build --platform linux/amd64,linux/arm64/v8 --push -t ghcr.io/$REPO/plexauthgui:main-${VERSION} -t ghcr.io/$REPO/plexauthgui:latest -f plexauthgui/Dockerfile .
-          docker buildx build --platform linux/amd64,linux/arm64/v8 --push -t ghcr.io/$REPO/get_imdb_id:main-${VERSION} -t ghcr.io/$REPO/get_imdb_id:latest -f get_imdb_id/Dockerfile .
+          docker buildx build --platform linux/amd64,linux/arm64/v8 --push -t ghcr.io/$REPO/getimdbid:main-${VERSION} -t ghcr.io/$REPO/getimdbid:latest -f getimdbid/Dockerfile .
