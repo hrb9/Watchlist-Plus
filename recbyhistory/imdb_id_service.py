@@ -1,7 +1,7 @@
 # recbyhistory/imdb_id_service.py
 import requests
 import os
-base_url = os.environ.get("GETIMDB_URL", "http://get_imdb_id:5331")
+base_url = os.environ.get("GETIMDB_URL", "http://getimdbid:5331")
 
 class IMDBServiceClient:
     def __init__(self, base_url="http://get_imdb_id:5331"):
