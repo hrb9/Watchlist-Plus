@@ -23,7 +23,7 @@ def get_imdb_from_title(title, media_type):
         logging.error(f"Error in IMDB lookup for {title}: {e}")
     return None
 
-@app.route('/get_imdb_id', methods=['POST'])
+@app.route('/getimdbid', methods=['POST'])
 def get_imdb_id():
     data = request.json
     title = data.get('title')

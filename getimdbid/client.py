@@ -12,7 +12,7 @@ class IMDBServiceClient:
             "guids": [guid.id for guid in plex_item.guids] if hasattr(plex_item, 'guids') else []
         }
         
-        response = requests.post(f"{self.base_url}/get_imdb_id", json=data)
+        response = requests.post(f"{self.base_url}/getimdbid", json=data)
         if response.status_code == 200:
             return response.json()["imdb_id"]
         return None
