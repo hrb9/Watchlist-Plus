@@ -80,69 +80,69 @@ class PlexHistory:
 
                         # רק אם נצפה
                         if item.isWatched:
-                            print(item.title)  # debug
-                            #if not imdb_id:
+                            if not imdb_id:
                                 # אם אין imdb_id, ממשיכים
-                                #continue
+                                continue
 
                             if item.type == 'episode':
-                                try:
-                                    show = getattr(item, 'show', lambda: None)()
-                                except Exception as e:
-                                    logging.error(f"Error fetching show for {item.title}: {e}")
-                                    show = None
+                                if item.type == 'episode':
+                                    try:
+                                        show = getattr(item, 'show', lambda: None)()
+                                    except Exception as e:
+                                        logging.error(f"Error fetching show for {item.title}: {e}")
+                                        show = None
 
-                                if show:
-                                    show_title = show.title
-                                    show_imdb = self.get_imdb_id(show)
-                                    show_rating = show.userRating if (hasattr(show, 'userRating') and show.userRating != 0.0) else user_rating
-                                    show_resolution = self.get_item_resolution(show)
+                                    if show:
+                                        show_title = show.title
+                                        show_imdb = self.get_imdb_id(show)
+                                        show_rating = show.userRating if (hasattr(show, 'userRating') and show.userRating != 0.0) else user_rating
+                                        show_resolution = self.get_item_resolution(show)
 
-                                    if show_title not in grouped_episodes:
-                                        grouped_episodes[show_title] = {
-                                            'title': show_title,
-                                            'imdbID': show_imdb,
-                                            'userRating': show_rating,
-                                            'resolution': show_resolution,
-                                            'episodes': []
+                                        # (1) Add the show-level record to watch_history as well
+                                        if show_imdb:
+                                            db.add_item(
+                                                title=show_title,
+                                                imdb_id=show_imdb,
+                                                user_rating=show_rating,
+                                                resolution=show_resolution
+                                            )
+
+                                        # (2) Continue adding the episode
+                                        episode_rating = self.get_user_rating(item)
+                                        if episode_rating == 0.0:
+                                            episode_rating = show_rating
+                                        episode_imdb = self.get_imdb_id(item)
+                                        episode_resolution = resolution
+
+                                        grouped_episodes[show_title]['episodes'].append({
+                                            'title': item.title,
+                                            'imdbID': episode_imdb,
+                                            'userRating': episode_rating,
+                                            'resolution': episode_resolution
+                                        })
+
+                                        db.add_item(
+                                            title=item.title,
+                                            imdb_id=episode_imdb,
+                                            user_rating=episode_rating,
+                                            resolution=episode_resolution
+                                        )
+                                        print(f"Added episode {item.title} to {show_title}")
+                                    else:
+                                        # אם לא הצלחנו למצוא show, נוסיף את הפרק כפריט רגיל
+                                        info = {
+                                            'title': title,
+                                            'imdbID': imdb_id,
+                                            'userRating': user_rating,
+                                            'resolution': resolution
                                         }
-
-                                    episode_rating = self.get_user_rating(item)
-                                    if episode_rating == 0.0:
-                                        episode_rating = show_rating
-                                    episode_imdb = self.get_imdb_id(item)
-                                    episode_resolution = resolution
-
-                                    grouped_episodes[show_title]['episodes'].append({
-                                        'title': item.title,
-                                        'imdbID': episode_imdb,
-                                        'userRating': episode_rating,
-                                        'resolution': episode_resolution
-                                    })
-
-                                    # מוסיף לטבלת watch_history גם עבור הפרק
-                                    db.add_item(
-                                        title=item.title,
-                                        imdb_id=episode_imdb,
-                                        user_rating=episode_rating,
-                                        resolution=episode_resolution
-                                    )
-                                else:
-                                    # אם לא הצלחנו למצוא show, נוסיף את הפרק כפריט רגיל
-                                    info = {
-                                        'title': title,
-                                        'imdbID': imdb_id,
-                                        'userRating': user_rating,
-                                        'resolution': resolution
-                                    }
-                                    history.append(info)
-                                    db.add_item(
-                                        title=title,
-                                        imdb_id=imdb_id,
-                                        user_rating=user_rating,
-                                        resolution=resolution
-                                    )
-
+                                        history.append(info)
+                                        db.add_item(
+                                            title=title,
+                                            imdb_id=imdb_id,
+                                            user_rating=user_rating,
+                                            resolution=resolution
+                                        )
                             elif item.type == 'movie':
                                 if imdb_id in seen_movies:
                                     # כבר ראינו סרט זה
@@ -164,6 +164,7 @@ class PlexHistory:
                                     user_rating=user_rating,
                                     resolution=resolution
                                 )
+                                print(f"Added movie {title}")
                             else:
                                 # item.type == 'show'
                                 info = {
@@ -179,6 +180,7 @@ class PlexHistory:
                                     user_rating=user_rating,
                                     resolution=resolution
                                 )
+                                print(f"Added show {title}")
 
         # איחוד הסדרות (grouped episodes) אל ה-history
         for show_title, show_data in grouped_episodes.items():
