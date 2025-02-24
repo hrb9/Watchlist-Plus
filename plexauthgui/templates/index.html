@@ -1,103 +1,219 @@
+<!-- templates/index.html -->
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width">
-    <title>Plex Authentication</title>
-    <script>
-        function activateScript() {
-            fetch('/activate_script', { method: 'POST' })
-                .then(response => response.json())
-                .then(data => {
-                    if (data.auth_url) {
-                        window.open(data.auth_url, '_blank');
-                        checkForAuthToken(data.pin_id);
-                    }
-                });
-        }
-
-        function checkForAuthToken(pinId) {
-            fetch(`/check_token/${pinId}`)
-                .then(response => response.json())
-                .then(data => {
-                    if (data.auth_token) {
-                        alert('Auth Token: ' + data.auth_token + ' for user: ' + data.user_id);
-                        // אחרי התחברות מצליחה, מציגים את section החיפוש
-                        document.getElementById('authSection').style.display = 'none';
-                        document.getElementById('searchSection').style.display = 'block';
-                    } else {
-                        setTimeout(() => checkForAuthToken(pinId), 5000);
-                    }
-                });
-        }
-
-        function goToSearchPage() {
-            window.location.href = '/search'; // מעבר לדף נפרד אם תרצה
-        }
-    </script>
-    <style>
-        body {
-            font-family: 'Arial', sans-serif;
-            background: linear-gradient(to right, red , black);
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            height: 100vh;
-            margin: 0;
-            color: #fff;
-        }
-        .auth-block {
-            background-color: rgb(29, 29, 29);
-            border-radius: 10px;
-            width: 700px;
-            height: 700px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            flex-direction: column;
-            box-shadow: 0 8px 16px rgba(0, 0, 0, 0.2);
-            padding: 40px;
-            position: relative;
-            margin-top: 20px;
-        }
-        .auth-logo {
-            color: #FF0000;
-            font-size: 24px;
-            font-weight: 600;
-            position: absolute;
-            top: 20px;
-            left: 20px;
-            border: 2px solid #FF0000;
-            padding: 5px;
-            border-radius: 5px;
-        }
-        #authenticatePlex {
-            background-color: #1e88e5;
-            color: white;
-            border: none;
-            padding: 15px 30px;
-            font-size: 20px;
-            border-radius: 5px;
-            cursor: pointer;
-            transition: background-color 0.3s ease;
-        }
-        #authenticatePlex:hover {
-            background-color: #1565c0;
-        }
-        #searchSection {
-            display: none; /* מוסתר כברירת מחדל, מוצג רק אחרי התחברות */
-            margin-top: 20px;
-        }
-    </style>
+  <meta charset="UTF-8">
+  <title>PlexAuthGUI - Modern</title>
+  <!-- Bootstrap CSS -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    body {
+      background: linear-gradient(to right, #1f1c2c, #928dab);
+      color: #fff;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    .auth-block {
+      background-color: rgba(0,0,0,0.5);
+      padding: 30px;
+      border-radius: 10px;
+      margin: auto;
+      width: 600px;
+      text-align: center;
+    }
+    #searchSection, #recommendationSection {
+      display: none; /* מוסתר עד שהמשתמש מתחבר */
+      margin-top: 20px;
+    }
+    .carousel-item img {
+      height: 300px;
+      object-fit: cover;
+    }
+  </style>
 </head>
 <body>
-    <div class="auth-block" id="authSection">
-        <div class="auth-logo">WatchList Plus by BaramFlix</div>
-        <button id="authenticatePlex" onclick="activateScript()">Authenticate with Plex</button>
-    </div>
 
-    <div class="auth-block" id="searchSection">
-        <h2>Search & Discovery</h2>
-        <p>Now that you're authenticated, you can do AI Search!</p>
-        <button onclick="goToSearchPage()">Go to AI Search Page</button>
-    </d
+<div class="auth-block">
+  <h2>Plex Authentication</h2>
+  <button id="authenticatePlex" class="btn btn-warning" onclick="activateScript()">Authenticate with Plex</button>
+  <div id="statusArea" class="mt-3"></div>
+
+  <!-- חלק שמוצג רק אחרי התחברות -->
+  <div id="searchSection" class="mt-4">
+    <h3>AI Search</h3>
+    <input type="text" id="searchQuery" class="form-control" placeholder="Enter search query">
+    <button class="btn btn-primary mt-2" onclick="performSearch()">Search</button>
+    <div id="searchResults" class="mt-3"></div>
+  </div>
+
+  <div id="recommendationSection" class="mt-4">
+    <h3>Discovery Recommendations</h3>
+    <button class="btn btn-success" onclick="fetchDiscovery()">Get Discovery</button>
+    <div id="discoveryContainer" class="mt-3"></div>
+
+    <hr class="text-light">
+
+    <h3>Monthly Recommendations</h3>
+    <button class="btn btn-info" onclick="fetchMonthly()">Get Monthly Recs</button>
+    <div id="monthlyContainer" class="mt-3"></div>
+  </div>
+</div>
+
+<!-- Bootstrap JS + deps -->
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+let currentUserId = null;
+
+function activateScript() {
+  fetch('/activate_script', { method: 'POST' })
+    .then(r => r.json())
+    .then(data => {
+      if (data.auth_url) {
+        // פותחים TAB חדש
+        window.open(data.auth_url, '_blank');
+        // בודקים האם התקבל auth_token
+        checkForAuthToken(data.pin_id);
+      }
+    });
+}
+
+function checkForAuthToken(pinId) {
+  fetch(`/check_token/${pinId}`)
+    .then(r => r.json())
+    .then(data => {
+      if (data.auth_token) {
+        currentUserId = data.user_id;
+        document.getElementById('statusArea').innerText = `Authenticated! user_id: ${currentUserId}`;
+        // מציגים את אלמנטי החיפוש וההמלצות
+        document.getElementById('searchSection').style.display = 'block';
+        document.getElementById('recommendationSection').style.display = 'block';
+      } else {
+        setTimeout(() => checkForAuthToken(pinId), 3000);
+      }
+    });
+}
+
+function performSearch() {
+  const query = document.getElementById('searchQuery').value;
+  if (!currentUserId) {
+    alert("Not authenticated yet!");
+    return;
+  }
+  fetch('/search_ai', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ query, user_id: currentUserId })
+  })
+  .then(r => r.json())
+  .then(data => {
+    if (data.search_results) {
+      displayCarousel(data.search_results, 'searchResults');
+    } else {
+      document.getElementById('searchResults').innerHTML = '<p>No results</p>';
+    }
+  })
+  .catch(e => console.error(e));
+}
+
+function fetchDiscovery() {
+  fetch('/discovery', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ user_id: currentUserId })
+  })
+  .then(r => r.json())
+  .then(data => {
+    if (data.discovery_recommendations) {
+      displayCarousel(data.discovery_recommendations, 'discoveryContainer');
+    } else {
+      document.getElementById('discoveryContainer').innerHTML = '<p>No discovery results</p>';
+    }
+  })
+  .catch(e => console.error(e));
+}
+
+function fetchMonthly() {
+  fetch(`/monthly_recs?user_id=${currentUserId}`)
+  .then(r => r.json())
+  .then(data => {
+    if (data.monthly_recommendations) {
+      displayCarousel(data.monthly_recommendations, 'monthlyContainer');
+    } else {
+      document.getElementById('monthlyContainer').innerHTML = '<p>No monthly results</p>';
+    }
+  })
+  .catch(e => console.error(e));
+}
+
+function displayCarousel(itemsArray, containerId) {
+  // בונים Carousel אחד
+  if (!Array.isArray(itemsArray)) {
+    document.getElementById(containerId).innerHTML = "<p>Invalid array format</p>";
+    return;
+  }
+  if (itemsArray.length === 0) {
+    document.getElementById(containerId).innerHTML = "<p>No items found</p>";
+    return;
+  }
+
+  const container = document.getElementById(containerId);
+  const cId = 'carousel-' + containerId + '-' + Math.floor(Math.random()*10000);
+  let html = `
+    <div id="${cId}" class="carousel slide" data-bs-ride="carousel">
+      <div class="carousel-inner">
+  `;
+  itemsArray.forEach((item, idx) => {
+    const activeClass = (idx === 0) ? 'active' : '';
+    const title = item.title || 'No Title';
+    const imageUrl = item.image_url || 'https://via.placeholder.com/400x300?text=No+Image';
+    const imdbId = item.imdb_id || '';
+
+    html += `
+      <div class="carousel-item ${activeClass}">
+        <img src="${imageUrl}" class="d-block w-100" alt="${title}">
+        <div class="carousel-caption d-none d-md-block">
+          <h5>${title}</h5>
+          <button class="btn btn-danger" onclick="addToWatchlist('${imdbId}','movie')">Add to Watchlist</button>
+        </div>
+      </div>
+    `;
+  });
+  html += `
+      </div>
+      <button class="carousel-control-prev" type="button" data-bs-target="#${cId}" data-bs-slide="prev">
+        <span class="carousel-control-prev-icon" aria-hidden="true"></span>
+      </button>
+      <button class="carousel-control-next" type="button" data-bs-target="#${cId}" data-bs-slide="next">
+        <span class="carousel-control-next-icon" aria-hidden="true"></span>
+      </button>
+    </div>
+  `;
+  container.innerHTML = html;
+}
+
+function addToWatchlist(imdb_id, media_type='movie') {
+  if (!currentUserId) {
+    alert("Not authenticated yet!");
+    return;
+  }
+  fetch('/add_to_watchlist_gui', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ user_id: currentUserId, imdb_id, media_type })
+  })
+  .then(r => r.json())
+  .then(data => {
+    if (data.status === 'OK') {
+      alert('Added successfully!');
+    } else {
+      alert('Failed: ' + JSON.stringify(data));
+    }
+  })
+  .catch(e => console.error(e));
+}
+</script>
+
+</body>
+</html>

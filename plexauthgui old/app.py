@@ -1,4 +1,5 @@
 # PlexAuthGUI/app.py
+
 from flask import Flask, jsonify, render_template, request
 import requests
 import sqlite3
@@ -9,13 +10,20 @@ from plexapi.myplex import MyPlexAccount
 
 app = Flask(__name__)
 
-# === DB + Auth Logic (unchanged) ===
+# ---------------- DB FUNCTIONS ----------------
 def get_db_path():
+    """
+    Compute the path to auth.db. Storing it in the same directory as the code,
+    or use a subdirectory if you prefer.
+    """
     return os.path.join(os.getcwd(), 'auth.db')
 
 def init_db():
-    path = get_db_path()
-    conn = sqlite3.connect(path)
+    """
+    Create the auth_tokens table if it doesn't already exist.
+    """
+    db_path = get_db_path()
+    conn = sqlite3.connect(db_path)
     c = conn.cursor()
     c.execute('''
       CREATE TABLE IF NOT EXISTS auth_tokens (
@@ -33,8 +41,11 @@ def init_db():
 init_db()
 
 def store_token_usage(token, user_id):
-    path = get_db_path()
-    conn = sqlite3.connect(path)
+    """
+    Insert or update the user's token in auth.db.
+    """
+    db_path = get_db_path()
+    conn = sqlite3.connect(db_path)
     c = conn.cursor()
     c.execute('''
       INSERT OR REPLACE INTO auth_tokens (token, user_id, created_at, last_used_at)
@@ -44,8 +55,11 @@ def store_token_usage(token, user_id):
     conn.close()
 
 def get_token_for_user(user_id):
-    path = get_db_path()
-    conn = sqlite3.connect(path)
+    """
+    Return the Plex token for a given user_id, or None if not found.
+    """
+    db_path = get_db_path()
+    conn = sqlite3.connect(db_path)
     c = conn.cursor()
     c.execute('SELECT token FROM auth_tokens WHERE user_id = ?', (user_id,))
     row = c.fetchone()
@@ -53,17 +67,26 @@ def get_token_for_user(user_id):
     return row[0] if row else None
 
 def get_all_users():
-    path = get_db_path()
-    if not os.path.exists(path):
+    """
+    Return a distinct list of user_id values from the auth_tokens table.
+    """
+    db_path = get_db_path()
+    if not os.path.exists(db_path):
         return []
-    conn = sqlite3.connect(path)
+    conn = sqlite3.connect(db_path)
     c = conn.cursor()
     c.execute('SELECT DISTINCT user_id FROM auth_tokens')
     rows = c.fetchall()
     conn.close()
     return [r[0] for r in rows]
 
+
+# ---------------- PLEX GUI PIN LOGIC ----------------
 def get_plex_auth_token(app_name, unique_client_id):
+    """
+    Initialize the Plex authentication process via the pin flow.
+    Returns pin_id and auth_url that user can open to authenticate in Plex.
+    """
     r = requests.post(
         "https://plex.tv/api/v2/pins",
         headers={"Accept": "application/json"},
@@ -84,14 +107,19 @@ def get_plex_auth_token(app_name, unique_client_id):
     auth_url = f"https://app.plex.tv/auth#?{encoded_params}"
     return pin_id, auth_url
 
-# === Routes for PIN auth ===
 @app.route('/')
 def index():
-    """Single-page with a button for authentication, a search bar, and recommendation carousels."""
+    """
+    Render the main page (index.html) with a button to start the Plex auth flow.
+    """
     return render_template('index.html')
 
 @app.route('/activate_script', methods=['POST'])
 def activate_script():
+    """
+    POST endpoint to initiate the PIN-based authentication with Plex.
+    Returns JSON containing the pin_id and a URL the user can open to authenticate.
+    """
     app_name = "PlexWatchListPlusByBaramFlix0099999"
     unique_client_id = "PlexWatchListPlusByBaramFlix0099999"
     pin_id, auth_url = get_plex_auth_token(app_name, unique_client_id)
@@ -99,6 +127,10 @@ def activate_script():
 
 @app.route('/check_token/<pin_id>', methods=['GET'])
 def check_token(pin_id):
+    """
+    GET endpoint to check if the pin_id has yielded an authToken from Plex.
+    If so, store it in auth.db.
+    """
     unique_client_id = "PlexWatchListPlusByBaramFlix0099999"
     r = requests.get(
         f"https://plex.tv/api/v2/pins/{pin_id}",
@@ -108,6 +140,7 @@ def check_token(pin_id):
     r_json = r.json()
     auth_token = r_json.get("authToken")
     if auth_token:
+        # We'll create a user_id from the pin_id
         user_id = f"user_{pin_id}"
         store_token_usage(auth_token, user_id)
         return jsonify({
@@ -123,8 +156,11 @@ def check_token(pin_id):
 
 @app.route('/get_user_info/<token>', methods=['GET'])
 def get_user_info(token):
-    path = get_db_path()
-    conn = sqlite3.connect(path)
+    """
+    GET endpoint to retrieve user_id, created_at, and last_used_at given a specific token.
+    """
+    db_path = get_db_path()
+    conn = sqlite3.connect(db_path)
     c = conn.cursor()
     c.execute('SELECT user_id, created_at, last_used_at FROM auth_tokens WHERE token = ?', (token,))
     result = c.fetchone()
@@ -137,95 +173,58 @@ def get_user_info(token):
         })
     return jsonify({'error': 'Token not found'}), 404
 
-# === API for search & recbyhistory integration ===
-@app.route('/search_ai', methods=['POST'])
-def search_ai():
-    """Calls recbyhistory's /ai_search endpoint with the query and user_id."""
-    data = request.json
-    query = data.get('query')
-    user_id = data.get('user_id')
-    if not query or not user_id:
-        return jsonify({'error': 'Missing query or user_id'}), 400
 
-    recbyhistory_url = os.environ.get("RECBYHISTORY_URL", "http://recbyhistory:5335")
-    ai_search_url = f"{recbyhistory_url}/ai_search"
-
-    payload = {
-        'user_id': user_id,
-        'gemini_api_key': os.environ.get("GEMINI_API_KEY", ""),
-        'tmdb_api_key': os.environ.get("TMDB_API_KEY", ""),
-        'query': query
-    }
-    try:
-        r = requests.post(ai_search_url, json=payload, timeout=10)
-        r.raise_for_status()
-        return jsonify(r.json())
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/discovery', methods=['POST'])
-def discovery():
-    """Calls recbyhistory's /discovery_recommendations."""
+# ---------------- API for recbyhistory calls (like original auth_service) ----------------
+@app.route('/connect', methods=['POST'])
+def connect():
+    """
+    POST /connect used by recbyhistory (or any other client) to retrieve:
+      - 'users' => list of user_ids
+      - 'account' => Plex token + username/email using plexapi
+    JSON input: { 'user_id': <some_user>, 'type': 'users' or 'account' }
+    """
     data = request.json
     user_id = data.get('user_id')
-    num_movies = data.get('num_movies', 3)
-    num_series = data.get('num_series', 2)
-    extra = data.get('extra_elements', '')
+    connection_type = data.get('type')
 
-    recbyhistory_url = os.environ.get("RECBYHISTORY_URL", "http://recbyhistory:5335")
-    disc_url = f"{recbyhistory_url}/discovery_recommendations"
-
-    payload = {
-        'user_id': user_id,
-        'gemini_api_key': os.environ.get("GEMINI_API_KEY", ""),
-        'tmdb_api_key': os.environ.get("TMDB_API_KEY", ""),
-        'num_movies': num_movies,
-        'num_series': num_series,
-        'extra_elements': extra
-    }
     try:
-        r = requests.post(disc_url, json=payload, timeout=10)
-        r.raise_for_status()
-        return jsonify(r.json())
+        if connection_type == 'users':
+            users = get_all_users()
+            return jsonify({'users': users})
+
+        token = get_token_for_user(user_id)
+        if not token:
+            return jsonify({'error': 'Token not found for user'}), 404
+
+        if connection_type == 'account':
+            # using plexapi to retrieve some account info if needed
+            account = MyPlexAccount(token=token)
+            return jsonify({
+                'token': token,
+                'account': {
+                    'username': account.username,
+                    'email': account.email
+                }
+            })
+        else:
+            return jsonify({'error': 'Invalid connection type'}), 400
+
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-@app.route('/monthly_recs', methods=['GET'])
-def monthly_recs():
-    """Get monthly recommendations from recbyhistory's /monthly_recommendations."""
-    user_id = request.args.get('user_id', '')
-    recbyhistory_url = os.environ.get("RECBYHISTORY_URL", "http://recbyhistory:5335")
-    monthly_url = f"{recbyhistory_url}/monthly_recommendations?user_id={user_id}"
+@app.route('/users', methods=['GET'])
+def list_users():
+    """
+    GET /users returns a JSON with a 'users' list: { 'users': [ 'user_...', ... ] }
+    recbyhistory (or other clients) can call this to retrieve all user IDs.
+    """
     try:
-        r = requests.get(monthly_url, timeout=10)
-        r.raise_for_status()
-        return jsonify(r.json())
+        users = get_all_users()
+        return jsonify({'users': users})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-@app.route('/add_to_watchlist_gui', methods=['POST'])
-def add_to_watchlist_gui():
-    """Proxy to recbyhistory's /add_to_watchlist."""
-    data = request.json
-    user_id = data.get('user_id')
-    imdb_id = data.get('imdb_id')
-    media_type = data.get('media_type', 'movie')
-
-    recbyhistory_url = os.environ.get("RECBYHISTORY_URL", "http://recbyhistory:5335")
-    add_url = f"{recbyhistory_url}/add_to_watchlist"
-
-    payload = {
-        'user_id': user_id,
-        'imdb_id': imdb_id,
-        'media_type': media_type
-    }
-    try:
-        r = requests.post(add_url, json=payload, timeout=10)
-        r.raise_for_status()
-        return jsonify(r.json())
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
-    # Default port 5332
-    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5332)), debug=True)
+    # Host=0.0.0.0 so that it is accessible from other containers (not just localhost).
+    app.run(host='0.0.0.0', port=5332, debug=True)

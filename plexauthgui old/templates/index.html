@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width">
+    <title>Plex Authentication</title>
+    <script>
+        function activateScript() {
+            fetch('/activate_script', { method: 'POST' })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.auth_url) {
+                        window.open(data.auth_url, '_blank');
+                        checkForAuthToken(data.pin_id);
+                    }
+                });
+        }
+
+        function checkForAuthToken(pinId) {
+            fetch(`/check_token/${pinId}`)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.auth_token) {
+                        alert('Auth Token: ' + data.auth_token + ' for user: ' + data.user_id);
+                        // אחרי התחברות מצליחה, מציגים את section החיפוש
+                        document.getElementById('authSection').style.display = 'none';
+                        document.getElementById('searchSection').style.display = 'block';
+                    } else {
+                        setTimeout(() => checkForAuthToken(pinId), 5000);
+                    }
+                });
+        }
+
+        function goToSearchPage() {
+            window.location.href = '/search'; // מעבר לדף נפרד אם תרצה
+        }
+    </script>
+    <style>
+        body {
+            font-family: 'Arial', sans-serif;
+            background: linear-gradient(to right, red , black);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            color: #fff;
+        }
+        .auth-block {
+            background-color: rgb(29, 29, 29);
+            border-radius: 10px;
+            width: 700px;
+            height: 700px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-direction: column;
+            box-shadow: 0 8px 16px rgba(0, 0, 0, 0.2);
+            padding: 40px;
+            position: relative;
+            margin-top: 20px;
+        }
+        .auth-logo {
+            color: #FF0000;
+            font-size: 24px;
+            font-weight: 600;
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            border: 2px solid #FF0000;
+            padding: 5px;
+            border-radius: 5px;
+        }
+        #authenticatePlex {
+            background-color: #1e88e5;
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            font-size: 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: background-color 0.3s ease;
+        }
+        #authenticatePlex:hover {
+            background-color: #1565c0;
+        }
+        #searchSection {
+            display: none; /* מוסתר כברירת מחדל, מוצג רק אחרי התחברות */
+            margin-top: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="auth-block" id="authSection">
+        <div class="auth-logo">WatchList Plus by BaramFlix</div>
+        <button id="authenticatePlex" onclick="activateScript()">Authenticate with Plex</button>
+    </div>
+
+    <div class="auth-block" id="searchSection">
+        <h2>Search & Discovery</h2>
+        <p>Now that you're authenticated, you can do AI Search!</p>
+        <button onclick="goToSearchPage()">Go to AI Search Page</button>
+    </d
