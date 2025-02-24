@@ -108,7 +108,8 @@ def check_token(pin_id):
     r_json = r.json()
     auth_token = r_json.get("authToken")
     if auth_token:
-        user_id = f"user_{pin_id}"
+        plex_account = MyPlexAccount(token=auth_token)
+        user_id = plex_account.username
         store_token_usage(auth_token, user_id)
         return jsonify({
             'auth_token': auth_token,
@@ -225,6 +226,19 @@ def add_to_watchlist_gui():
         return jsonify(r.json())
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+    
+@app.route('/users', methods=['GET'])
+def list_users():
+    """
+    GET /users returns a JSON with a 'users' list: { 'users': [ 'user_...', ... ] }
+    recbyhistory (or other clients) can call this to retrieve all user IDs.
+    """
+    try:
+        users = get_all_users()
+        return jsonify({'users': users})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+   
 
 if __name__ == '__main__':
     # Default port 5332
