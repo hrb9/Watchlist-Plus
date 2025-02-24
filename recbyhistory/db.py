@@ -1,4 +1,3 @@
-# recbyhistory/db.py
 import sqlite3
 import os
 from datetime import datetime
@@ -16,20 +15,22 @@ class Database:
     def create_tables(self):
         cursor = self.conn.cursor()
         
-        # Recreate watch_history table on every run
-        cursor.execute('DROP TABLE IF EXISTS watch_history')
+        # We no longer drop watch_history on every run,
+        # we just create if not exists (with a UNIQUE constraint to avoid duplicates).
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS watch_history (
                 id INTEGER PRIMARY KEY,
+                user_id TEXT NOT NULL,
                 title TEXT NOT NULL,
                 imdb_id TEXT NOT NULL,
                 user_rating FLOAT,
                 resolution TEXT,
-                added_at TIMESTAMP
+                added_at TIMESTAMP,
+                UNIQUE (user_id, imdb_id, resolution) ON CONFLICT IGNORE
             )
         ''')
 
-        # all_items table remains persistent
+        # all_items remains persistent
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS all_items (
                 id INTEGER PRIMARY KEY,
@@ -68,11 +69,15 @@ class Database:
 
     # Functions for watch_history and all_items
     def add_item(self, title, imdb_id, user_rating, resolution):
+        """
+        Insert a record for watch_history with user_id,
+        avoiding duplicates via the UNIQUE constraint on (user_id, imdb_id, resolution).
+        """
         cursor = self.conn.cursor()
         cursor.execute('''
-            INSERT INTO watch_history (title, imdb_id, user_rating, resolution, added_at)
-            VALUES (?, ?, ?, ?, ?)
-        ''', (title, imdb_id, user_rating, resolution, datetime.now()))
+            INSERT INTO watch_history (user_id, title, imdb_id, user_rating, resolution, added_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ''', (self.user_id, title, imdb_id, user_rating, resolution, datetime.now()))
         self.conn.commit()
 
     def add_all_item(self, title, imdb_id, user_rating, resolution):
@@ -105,6 +110,9 @@ class Database:
 
     # Functions for ai_recommendations
     def add_recommendation(self, group_id, title, media_type, recommendation_text):
+        """
+        Insert multiple AI-driven recommendations (parsed from JSON) into ai_recommendations table.
+        """
         cursor = self.conn.cursor()
         try:
             import json
