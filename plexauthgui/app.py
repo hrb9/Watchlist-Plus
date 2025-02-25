@@ -12,9 +12,10 @@ def get_db_path():
     return os.path.join(os.getcwd(), 'auth.db')
 
 def init_db():
-    path = get_db_path()
-    conn = sqlite3.connect(path)
+    db_path = get_db_path()
+    conn = sqlite3.connect(db_path)
     c = conn.cursor()
+    # Add admin column to auth_tokens table
     c.execute('''
       CREATE TABLE IF NOT EXISTS auth_tokens (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -22,22 +23,32 @@ def init_db():
         user_id TEXT NOT NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         last_used_at TIMESTAMP,
+        is_admin BOOLEAN DEFAULT 0,
         UNIQUE(token, user_id)
       )
     ''')
+    
+    # Check if we have any users - if not, next login will be admin
+    c.execute('SELECT COUNT(*) FROM auth_tokens')
+    count = c.fetchone()[0]
+    if count == 0:
+        # Create a flag file to mark that next user will be admin
+        with open('first_user.flag', 'w') as f:
+            f.write('1')
+            
     conn.commit()
     conn.close()
 
 init_db()  # Initialize the database
 
-def store_token_usage(token, user_id):
+def store_token_usage(token, user_id, is_admin=False):
     path = get_db_path()
     conn = sqlite3.connect(path)
     c = conn.cursor()
     c.execute('''
-      INSERT OR REPLACE INTO auth_tokens (token, user_id, created_at, last_used_at)
-      VALUES (?, ?, ?, ?)
-    ''', (token, user_id, datetime.now(), datetime.now()))
+      INSERT OR REPLACE INTO auth_tokens (token, user_id, created_at, last_used_at, is_admin)
+      VALUES (?, ?, ?, ?, ?)
+    ''', (token, user_id, datetime.now(), datetime.now(), is_admin))
     conn.commit()
     conn.close()
 
@@ -107,11 +118,21 @@ def check_token(pin_id):
     auth_token = r_json.get("authToken")
     if auth_token:
         plex_account = MyPlexAccount(token=auth_token)
-        user_id = plex_account.username  # Use Plex username
-        store_token_usage(auth_token, user_id)
+        user_id = plex_account.username
+        
+        # Check if this should be admin
+        is_admin = False
+        if os.path.exists('first_user.flag'):
+            is_admin = True
+            os.remove('first_user.flag')
+        
+        # Store with admin status
+        store_token_usage(auth_token, user_id, is_admin)
+        
         return jsonify({
             'auth_token': auth_token,
             'user_id': user_id,
+            'is_admin': is_admin,
             'status': 'success'
         })
     else:
@@ -204,22 +225,11 @@ def monthly_recs():
 
 @app.route('/add_to_watchlist_gui', methods=['POST'])
 def add_to_watchlist_gui():
-    """Proxy to recbyhistory's /add_to_watchlist."""
+    """Forward the watchlist request to the watchlistrequests service"""
     data = request.json
-    user_id = data.get('user_id')
-    imdb_id = data.get('imdb_id')
-    media_type = data.get('media_type', 'movie')
-
-    recbyhistory_url = os.environ.get("RECBYHISTORY_URL", "http://recbyhistory:5335")
-    add_url = f"{recbyhistory_url}/add_to_watchlist"
-
-    payload = {
-        'user_id': user_id,
-        'imdb_id': imdb_id,
-        'media_type': media_type
-    }
+    watchlist_url = os.environ.get("WATCHLIST_URL", "http://watchlistrequests:5333")
     try:
-        r = requests.post(add_url, json=payload, timeout=10)
+        r = requests.post(f"{watchlist_url}/api/request", json=data, timeout=10)
         r.raise_for_status()
         return jsonify(r.json())
     except Exception as e:

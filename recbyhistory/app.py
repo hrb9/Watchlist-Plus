@@ -314,52 +314,17 @@ def ai_search(request: AISearchRequest):
     logging.info(f"AI search executed for user {request.user_id}.")
     return {"user_id": request.user_id, "search_results": results}
 
-def add_to_plex_watchlist(user_id: str, imdb_id: str, media_type: str):
-    """
-    מתחבר ל-Plex ומוסיף תוכן ל-watchlist (ללא קשר לכתיבה חדשה של היסטוריה).
-    """
-    auth_client = PlexAuthClient()
-    data = {"user_id": user_id, "type": "account"}
-    response = requests.post(f"{auth_client.base_url}/connect", json=data)
-    if response.status_code != 200:
-        logging.error(f"Failed to obtain Plex token for user {user_id}")
-        return {"status": "Failed", "message": "Could not obtain Plex token."}
-    token = response.json().get("token")
-    if not token:
-        logging.error(f"No token received for user {user_id}")
-        return {"status": "Failed", "message": "No Plex token received."}
-
-    plex_server_url = os.environ.get("PLEX_SERVER_URL")
-    if not plex_server_url:
-        logging.error("PLEX_SERVER_URL not configured.")
-        return {"status": "Failed", "message": "PLEX_SERVER_URL not configured."}
-
-    url = f"{plex_server_url}/api/watchlist/add?X-Plex-Token={token}"
-    payload = {
-        "imdb_id": imdb_id,
-        "media_type": media_type
-    }
-    try:
-        r = requests.post(url, json=payload, timeout=10)
-        r.raise_for_status()
-        logging.info(f"Successfully added imdb_id {imdb_id} to watchlist for user {user_id} on Plex server.")
-        return {"status": "OK", "response": r.json()}
-    except Exception as e:
-        logging.error(f"Error adding to Plex watchlist for user {user_id}: {e}")
-        return {"status": "Failed", "message": str(e)}
-
 @app.post("/add_to_watchlist")
 def add_to_watchlist(request: WatchlistRequest):
-    """
-    כפתור/בקשה להוספת פריט ל-watchlist ב-Plex, ללא שינוי בהיסטוריה.
-    """
-    logging.info(f"Adding content {request.imdb_id} to Plex watchlist for user {request.user_id}")
-    result = add_to_plex_watchlist(request.user_id, request.imdb_id, request.media_type)
-    if result.get("status") == "OK":
-        return {"status": "OK", "message": f"Content {request.imdb_id} added to Plex watchlist for user {request.user_id}."}
-    else:
-        logging.error(f"Failed to add content {request.imdb_id} to Plex watchlist: {result.get('message')}")
-        raise HTTPException(status_code=500, detail=f"Error adding to Plex watchlist: {result.get('message')}")
+    """Forward the request to watchlistrequests service"""
+    watchlist_url = os.environ.get("WATCHLIST_URL", "http://watchlistrequests:5333")
+    try:
+        r = requests.post(f"{watchlist_url}/api/request", json=request.dict(), timeout=10)
+        r.raise_for_status()
+        return r.json()
+    except Exception as e:
+        logging.error(f"Error forwarding watchlist request: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     uvicorn.run(

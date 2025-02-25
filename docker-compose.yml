@@ -10,6 +10,7 @@ services:
       TMDB_API_KEY: "your_tmdb_key_here"
       OVERSEERR_API_TOKEN: "your_overseerr_token_here"
       OVERSEERR_URL: "http://your_overseerr_url:5055"
+      WATCHLIST_URL: "http://watchlistrequests:5333"
 
   plexauthgui:
     image: ghcr.io/hrb9/watchlist-plus/plexauthgui:latest
@@ -20,6 +21,7 @@ services:
       RECBYHISTORY_URL: "http://recbyhistory:5335"
       GEMINI_API_KEY: "your_gemini_key_here"
       TMDB_API_KEY: "your_tmdb_key_here"
+      WATCHLIST_URL: "http://watchlistrequests:5333"
 
   getimdbid:
     image: ghcr.io/hrb9/watchlist-plus/getimdbid:latest
@@ -29,4 +31,15 @@ services:
     environment:
       GEMINI_API_KEY: "your_gemini_key_here"
       TMDB_API_KEY: "your_tmdb_key_here"
+      
+
+  watchlistrequests:
+    image: ghcr.io/hrb9/watchlist-plus/watchlistrequests:latest
+    container_name: watchlistrequests
+    ports:
+      - "5333:5333"
+    environment:
+      RECBYHISTORY_URL: "http://recbyhistory:5335"
+      PLEXAUTH_URL: "http://plexauthgui:5332"
+
 
