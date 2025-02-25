@@ -1,4 +1,3 @@
-# PlexAuthGUI/app.py
 from flask import Flask, jsonify, render_template, request
 import requests
 import sqlite3
@@ -9,7 +8,6 @@ from plexapi.myplex import MyPlexAccount
 
 app = Flask(__name__)
 
-# === DB + Auth Logic (unchanged) ===
 def get_db_path():
     return os.path.join(os.getcwd(), 'auth.db')
 
@@ -30,7 +28,7 @@ def init_db():
     conn.commit()
     conn.close()
 
-init_db()
+init_db()  # Initialize the database
 
 def store_token_usage(token, user_id):
     path = get_db_path()
@@ -92,7 +90,7 @@ def index():
 
 @app.route('/activate_script', methods=['POST'])
 def activate_script():
-    app_name = "PlexWatchListPlusByBaramFlix0099999"
+    app_name = "PlexWatchListPlusByBaramFlix0099999"  #  Keep this consistent
     unique_client_id = "PlexWatchListPlusByBaramFlix0099999"
     pin_id, auth_url = get_plex_auth_token(app_name, unique_client_id)
     return jsonify({'auth_url': auth_url, 'pin_id': pin_id})
@@ -109,7 +107,7 @@ def check_token(pin_id):
     auth_token = r_json.get("authToken")
     if auth_token:
         plex_account = MyPlexAccount(token=auth_token)
-        user_id = plex_account.username
+        user_id = plex_account.username  # Use Plex username
         store_token_usage(auth_token, user_id)
         return jsonify({
             'auth_token': auth_token,
@@ -226,7 +224,8 @@ def add_to_watchlist_gui():
         return jsonify(r.json())
     except Exception as e:
         return jsonify({'error': str(e)}), 500
-    
+
+# === API endpoint from File 1 (still useful for other clients) ===
 @app.route('/users', methods=['GET'])
 def list_users():
     """
@@ -236,6 +235,44 @@ def list_users():
     try:
         users = get_all_users()
         return jsonify({'users': users})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+# === API endpoint from file 1 ( /connect )
+@app.route('/connect', methods=['POST'])
+def connect():
+    """
+    POST /connect used by recbyhistory (or any other client) to retrieve:
+      - 'users' => list of user_ids
+      - 'account' => Plex token + username/email using plexapi
+    JSON input: { 'user_id': <some_user>, 'type': 'users' or 'account' }
+    """
+    data = request.json
+    user_id = data.get('user_id')
+    connection_type = data.get('type')
+
+    try:
+        if connection_type == 'users':
+            users = get_all_users()
+            return jsonify({'users': users})
+
+        token = get_token_for_user(user_id)
+        if not token:
+            return jsonify({'error': 'Token not found for user'}), 404
+
+        if connection_type == 'account':
+            # using plexapi to retrieve some account info if needed
+            account = MyPlexAccount(token=token)
+            return jsonify({
+                'token': token,
+                'account': {
+                    'username': account.username,
+                    'email': account.email
+                }
+            })
+        else:
+            return jsonify({'error': 'Invalid connection type'}), 400
+
     except Exception as e:
         return jsonify({'error': str(e)}), 500
    

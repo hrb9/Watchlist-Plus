@@ -117,57 +117,57 @@ def get_all_users_from_plexauth():
         return []
 
 def process_all_users():
-    """
-    רץ כל דקה (IntervalTrigger). שולף את המשתמשים ומפעיל את המשימות (history, taste, monthly)
-    רק על פי מרווחי הזמן הרצויים (יום, שבוע, חודש).
-    """
     global USER_SCHEDULE
-
+    
     user_list = get_all_users_from_plexauth()
     if not user_list:
         logging.info("No users returned from plexauthgui; skipping tasks.")
         return
 
     now = datetime.utcnow()
+    
     for user_id in user_list:
         if user_id not in USER_SCHEDULE:
-            logging.info(f"New user {user_id} detected; running tasks immediately.")
+            # Initialize new user schedule with staggered times
+            logging.info(f"New user {user_id} detected; initializing schedule.")
             USER_SCHEDULE[user_id] = {
-                'last_history': now,
-                'last_taste': now,
-                'last_monthly': now
+                'last_history': now - timedelta(days=1),  # Run history immediately 
+                'last_taste': now - timedelta(days=7),    # Run taste immediately
+                'last_monthly': now - timedelta(days=30)  # Run monthly immediately
             }
+        
+        times = USER_SCHEDULE[user_id]
+        
+        # Add buffer time to avoid multiple runs in same day
+        buffer_hours = 2
+        
+        # Daily history check with buffer
+        if now - times['last_history'] >= timedelta(days=1, hours=buffer_hours):
+            logging.info(f"Running daily history task for user {user_id}")
             run_history_task(user_id)
+            USER_SCHEDULE[user_id]['last_history'] = now
+            
+        # Weekly taste check with buffer
+        if now - times['last_taste'] >= timedelta(days=7, hours=buffer_hours):
+            logging.info(f"Running weekly taste task for user {user_id}")
             run_taste_task(user_id)
+            USER_SCHEDULE[user_id]['last_taste'] = now
+            
+        # Monthly recommendations check with buffer
+        if now - times['last_monthly'] >= timedelta(days=30, hours=buffer_hours):
+            logging.info(f"Running monthly recommendations task for user {user_id}")
             run_monthly_task(user_id)
-        else:
-            times = USER_SCHEDULE[user_id]
-            # עדכון history: פעם ביום
-            if now - times['last_history'] >= timedelta(days=1):
-                logging.info(f"Daily interval for user {user_id}. Running history task.")
-                run_history_task(user_id)
-                USER_SCHEDULE[user_id]['last_history'] = now
-            # עדכון taste: פעם בשבוע
-            if now - times['last_taste'] >= timedelta(days=7):
-                logging.info(f"Weekly interval for user {user_id}. Running taste task.")
-                run_taste_task(user_id)
-                USER_SCHEDULE[user_id]['last_taste'] = now
-            # המלצות חודשיות
-            if now - times['last_monthly'] >= timedelta(days=30):
-                logging.info(f"Monthly interval for user {user_id}. Running monthly recs.")
-                run_monthly_task(user_id)
-                USER_SCHEDULE[user_id]['last_monthly'] = now
+            USER_SCHEDULE[user_id]['last_monthly'] = now
 
 # ----------------- Lifespan Event Handler -----------------
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # מפעילים Scheduler ורצים כל דקה
     scheduler = BackgroundScheduler()
-    scheduler.add_job(process_all_users, IntervalTrigger(minutes=1))
+    # Change from every minute to every hour
+    scheduler.add_job(process_all_users, IntervalTrigger(hours=1))
     scheduler.start()
-    logging.info("Application startup: running initial tasks for all users from plexauthgui.")
-    # הפעלה ראשונית
-    process_all_users()
+    logging.info("Application startup: initializing scheduled tasks.")
+    process_all_users()  # Initial run
     try:
         yield
     finally:
