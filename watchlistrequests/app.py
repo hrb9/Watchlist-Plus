@@ -3,6 +3,7 @@ import sqlite3
 import os
 from datetime import datetime
 import requests
+import logging
 
 app = Flask(__name__)
 
@@ -134,6 +135,63 @@ def approve_request(request_id):
         return jsonify({'status': 'success'})
     else:
         return jsonify({'error': 'Failed to add to Plex watchlist'}), 500
+
+@app.route('/api/check_admin', methods=['POST'])
+def check_admin():
+    """Check if user is admin"""
+    data = request.json
+    user_id = data.get('user_id')
+    
+    plexauth_url = os.environ.get("PLEXAUTH_URL", "http://plexauthgui:5332")
+    try:
+        r = requests.post(f"{plexauth_url}/connect", 
+                         json={"user_id": user_id, "type": "account"})
+        r.raise_for_status()
+        data = r.json()
+        return jsonify({"is_admin": data.get("is_admin", False)})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/auto_approval', methods=['POST'])
+def set_auto_approval():
+    """Set auto-approval status for a user (admin only)"""
+    data = request.json
+    admin_id = data.get('admin_id')
+    target_user = data.get('user_id')
+    enabled = data.get('enabled', False)
+    
+    # Verify admin status
+    plexauth_url = os.environ.get("PLEXAUTH_URL", "http://plexauthgui:5332")
+    try:
+        r = requests.post(f"{plexauth_url}/connect", 
+                         json={"user_id": admin_id, "type": "account"})
+        r.raise_for_status()
+        if not r.json().get("is_admin", False):
+            return jsonify({"error": "Not authorized"}), 403
+            
+        # Update auto-approval status
+        conn = sqlite3.connect('watchlist_requests.db')
+        c = conn.cursor()
+        c.execute('''
+        INSERT OR REPLACE INTO auto_approvals (user_id, enabled)
+        VALUES (?, ?)
+        ''', (target_user, enabled))
+        conn.commit()
+        conn.close()
+        return jsonify({"status": "success"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/users', methods=['GET'])
+def get_users():
+    """Get list of users from plexauthgui"""
+    plexauth_url = os.environ.get("PLEXAUTH_URL", "http://plexauthgui:5332")
+    try:
+        r = requests.get(f"{plexauth_url}/users")
+        r.raise_for_status()
+        return jsonify(r.json())
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5333)

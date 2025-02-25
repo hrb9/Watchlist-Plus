@@ -21,6 +21,7 @@ from rec import (
     get_ai_search_results
 )
 from auth_client import PlexAuthClient
+from plexapi.myplex import MyPlexAccount
 
 # Configure logging
 logging.basicConfig(
@@ -316,14 +317,33 @@ def ai_search(request: AISearchRequest):
 
 @app.post("/add_to_watchlist")
 def add_to_watchlist(request: WatchlistRequest):
-    """Forward the request to watchlistrequests service"""
-    watchlist_url = os.environ.get("WATCHLIST_URL", "http://watchlistrequests:5333")
+    """Add items to the Plex watchlist using user's token"""
+    
+    # Get user's Plex token from plexauthgui service
+    plexauth_url = os.environ.get("PLEXAUTH_URL", "http://plexauthgui:5332")
     try:
-        r = requests.post(f"{watchlist_url}/api/request", json=request.dict(), timeout=10)
+        # Get user's token
+        r = requests.post(f"{plexauth_url}/connect", 
+                         json={"user_id": request.user_id, "type": "account"})
         r.raise_for_status()
-        return r.json()
+        user_token = r.json().get("token")
+        
+        if not user_token:
+            raise HTTPException(status_code=404, detail="User token not found")
+            
+        # Create Plex account instance with user's token
+        plex_account = MyPlexAccount(token=user_token)
+        
+        # Add item to user's watchlist
+        plex_account.addToWatchlist(request.imdb_id)
+        logging.info(f"Successfully added {request.imdb_id} to watchlist for user {request.user_id}")
+        
+        return {"status": "success", 
+                "message": f"Added {request.imdb_id} to watchlist",
+                "user_id": request.user_id}
+                
     except Exception as e:
-        logging.error(f"Error forwarding watchlist request: {e}")
+        logging.error(f"Error adding to watchlist: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
