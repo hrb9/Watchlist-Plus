@@ -183,14 +183,20 @@ def check_new_users():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     scheduler = BackgroundScheduler()
+    
+    # Check for new users every 10 seconds
+    scheduler.add_job(check_new_users, IntervalTrigger(seconds=10))
+    
     # Regular tasks every hour
     scheduler.add_job(process_all_users, IntervalTrigger(hours=1))
-    # Check for new users every minute
-    scheduler.add_job(check_new_users, IntervalTrigger(minutes=1))
+    
     scheduler.start()
     
     logging.info("Application startup: initializing scheduled tasks.")
-    process_all_users()  # Initial run
+    # Run both checks immediately on startup
+    check_new_users()
+    process_all_users()
+    
     try:
         yield
     finally:

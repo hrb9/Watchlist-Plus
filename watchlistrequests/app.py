@@ -1,7 +1,7 @@
 from flask import Flask, render_template, jsonify, request
 import sqlite3
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 import requests
 import logging
 
@@ -192,6 +192,41 @@ def get_users():
         return jsonify(r.json())
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+def check_new_users():
+    """Checks only for new users, runs frequently"""
+    global USER_SCHEDULE
+    
+    plexauthgui_url = os.environ.get("PLEXAUTH_URL", "http://plexauthgui:5332")
+    try:
+        r = requests.get(f"{plexauthgui_url}/users")
+        r.raise_for_status()
+        user_list = r.json().get('users', [])
+        
+        if not user_list:
+            logging.info("No users found in plexauthgui")
+            return
+            
+        now = datetime.utcnow()
+        for user_id in user_list:
+            if user_id not in USER_SCHEDULE:
+                logging.info(f"New user detected: {user_id}")
+                USER_SCHEDULE[user_id] = {
+                    'last_history': now - timedelta(days=1),
+                    'last_taste': now - timedelta(days=7),
+                    'last_monthly': now - timedelta(days=30)
+                }
+                # Run initial tasks immediately for new user
+                try:
+                    run_history_task(user_id)
+                    run_taste_task(user_id)
+                    run_monthly_task(user_id)
+                    logging.info(f"Successfully initialized tasks for new user {user_id}")
+                except Exception as e:
+                    logging.error(f"Error initializing tasks for new user {user_id}: {e}")
+                    
+    except Exception as e:
+        logging.error(f"Error in check_new_users: {e}")
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5333)
