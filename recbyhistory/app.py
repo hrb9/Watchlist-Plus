@@ -160,20 +160,41 @@ def process_all_users():
             run_monthly_task(user_id)
             USER_SCHEDULE[user_id]['last_monthly'] = now
 
+def check_new_users():
+    """Checks only for new users, runs more frequently"""
+    global USER_SCHEDULE
+    user_list = get_all_users_from_plexauth()
+    now = datetime.utcnow()
+    
+    for user_id in user_list:
+        if user_id not in USER_SCHEDULE:
+            logging.info(f"New user {user_id} detected; initializing schedule.")
+            USER_SCHEDULE[user_id] = {
+                'last_history': now - timedelta(days=1),
+                'last_taste': now - timedelta(days=7),
+                'last_monthly': now - timedelta(days=30)
+            }
+            # Run initial tasks for new user
+            run_history_task(user_id)
+            run_taste_task(user_id)
+            run_monthly_task(user_id)
+
 # ----------------- Lifespan Event Handler -----------------
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     scheduler = BackgroundScheduler()
-    # Change from every minute to every hour
+    # Regular tasks every hour
     scheduler.add_job(process_all_users, IntervalTrigger(hours=1))
+    # Check for new users every minute
+    scheduler.add_job(check_new_users, IntervalTrigger(minutes=1))
     scheduler.start()
+    
     logging.info("Application startup: initializing scheduled tasks.")
     process_all_users()  # Initial run
     try:
         yield
     finally:
         scheduler.shutdown()
-        logging.info("Application shutdown: scheduler stopped.")
 
 app = FastAPI(
     title="RecByHistory",

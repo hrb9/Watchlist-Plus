@@ -31,6 +31,26 @@
       height: 300px;
       object-fit: cover;
     }
+    .admin-tools {
+      display: none;
+      margin-top: 20px;
+      padding: 15px;
+      background: #2a2a2a;
+      border-radius: 5px;
+    }
+    .service-links {
+      margin-top: 20px;
+    }
+    .service-button {
+      display: none;
+      margin: 5px;
+      padding: 10px;
+      background: #e5a00d;
+      color: white;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+    }
   </style>
 </head>
 <body>
@@ -66,6 +86,24 @@
   </div>
 </div>
 
+<div id="authSuccess" style="display:none;">
+  <h3>Successfully Authenticated!</h3>
+  <p>Your user ID: <span id="userId"></span></p>
+  
+  <!-- Service Links -->
+  <div class="service-links">
+    <a id="watchlistRequestsLink" href="http://watchlistrequests:5333" class="service-button">
+      Open Watchlist Requests Dashboard
+    </a>
+  </div>
+  
+  <!-- Admin Tools -->
+  <div id="adminTools" class="admin-tools">
+    <h4>Admin Tools</h4>
+    <p>You have administrative privileges.</p>
+  </div>
+</div>
+
 <!-- Bootstrap JS + deps -->
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/js/bootstrap.bundle.min.js"></script>
 <script>
@@ -97,6 +135,7 @@ function checkForAuthToken(pinId) {
         if (data.is_admin) {
           document.getElementById('adminSection').style.display = 'block';
         }
+        handleAuthSuccess(data);
       } else {
         setTimeout(() => checkForAuthToken(pinId), 3000);
       }
@@ -220,6 +259,23 @@ function addToWatchlist(imdb_id, media_type='movie') {
     }
   })
   .catch(e => console.error(e));
+}
+
+function handleAuthSuccess(data) {
+  document.getElementById('authSuccess').style.display = 'block';
+  document.getElementById('userId').textContent = data.user_id;
+  
+  // Show Watchlist Requests link for all users
+  document.getElementById('watchlistRequestsLink').style.display = 'inline-block';
+  
+  // Show admin tools if user is admin
+  if (data.is_admin) {
+    document.getElementById('adminTools').style.display = 'block';
+  }
+  
+  // Store user info in localStorage
+  localStorage.setItem('user_id', data.user_id);
+  localStorage.setItem('is_admin', data.is_admin);
 }
 </script>
 
