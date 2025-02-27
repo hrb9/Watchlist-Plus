@@ -271,12 +271,39 @@ function handleAuthSuccess(data) {
   // Show admin tools if user is admin
   if (data.is_admin) {
     document.getElementById('adminTools').style.display = 'block';
+    document.getElementById('adminSection').style.display = 'block';
   }
   
   // Store user info in localStorage
   localStorage.setItem('user_id', data.user_id);
   localStorage.setItem('is_admin', data.is_admin);
+  
+  // Hide authentication button and show authenticated interface
+  document.getElementById('authenticatePlex').style.display = 'none';
 }
+
+// Check for admin status on page load
+document.addEventListener('DOMContentLoaded', function() {
+  const userId = localStorage.getItem('user_id');
+  const isAdmin = localStorage.getItem('is_admin') === 'true';
+  
+  if (userId) {
+    // User is already logged in
+    currentUserId = userId;
+    document.getElementById('statusArea').innerText = `Authenticated! user_id: ${userId}`;
+    document.getElementById('searchSection').style.display = 'block';
+    document.getElementById('recommendationSection').style.display = 'block';
+    document.getElementById('authSuccess').style.display = 'block';
+    document.getElementById('userId').textContent = userId;
+    document.getElementById('watchlistRequestsLink').style.display = 'inline-block';
+    document.getElementById('authenticatePlex').style.display = 'none';
+    
+    if (isAdmin) {
+      document.getElementById('adminTools').style.display = 'block';
+      document.getElementById('adminSection').style.display = 'block';
+    }
+  }
+});
 </script>
 
 </body>

@@ -33,32 +33,51 @@
 
         <!-- Requests List -->
         <div id="requests" class="row"></div>
+        <div id="noRequests" class="alert alert-info" style="display:none">
+            No watchlist requests found. Make a request from the recommendations page.
+        </div>
     </div>
     
     <script>
-        let currentUserId = localStorage.getItem('user_id');
+        // Store user ID from local storage or URL
+        let currentUserId = localStorage.getItem('user_id') || new URLSearchParams(window.location.search).get('user_id');
         let isAdmin = false;
+        
+        console.log("Current user ID:", currentUserId);
 
-        // Check admin status on load
-        fetch('/api/check_admin', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({user_id: currentUserId})
-        })
-        .then(r => r.json())
-        .then(data => {
-            isAdmin = data.is_admin;
-            if (isAdmin) {
-                document.getElementById('adminPanel').style.display = 'block';
-                loadUsers();
-            }
-        });
+        // Check admin status on page load
+        if (currentUserId) {
+            fetch('/api/check_admin', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({user_id: currentUserId})
+            })
+            .then(r => r.json())
+            .then(data => {
+                console.log("Admin check result:", data);
+                isAdmin = data.is_admin;
+                if (isAdmin) {
+                    document.getElementById('adminPanel').style.display = 'block';
+                    loadUsers();
+                }
+                loadRequests();
+            })
+            .catch(err => {
+                console.error("Error checking admin status:", err);
+                // Still try to load requests even if admin check fails
+                loadRequests();
+            });
+        } else {
+            console.log("No user ID found, showing all requests");
+            loadRequests();
+        }
 
         // Load users for admin panel
         function loadUsers() {
             fetch('/api/users')
                 .then(r => r.json())
                 .then(data => {
+                    console.log("Users loaded:", data);
                     const select = document.getElementById('userSelect');
                     data.users.forEach(user => {
                         const option = document.createElement('option');
@@ -66,13 +85,19 @@
                         option.textContent = user;
                         select.appendChild(option);
                     });
-                });
+                })
+                .catch(err => console.error("Error loading users:", err));
         }
 
         // Set auto-approval for user
         function setAutoApproval() {
             const userId = document.getElementById('userSelect').value;
             const enabled = document.getElementById('autoApprovalCheck').checked;
+            
+            if (!userId) {
+                alert("Please select a user");
+                return;
+            }
             
             fetch('/api/auto_approval', {
                 method: 'POST',
@@ -86,9 +111,12 @@
             .then(r => r.json())
             .then(data => {
                 if (data.status === 'success') {
-                    alert('Auto-approval setting updated');
+                    alert('Auto-approval setting updated for ' + userId);
+                } else {
+                    alert('Error: ' + (data.error || 'Unknown error'));
                 }
-            });
+            })
+            .catch(err => console.error("Error setting auto-approval:", err));
         }
 
         // Load and display requests
@@ -96,15 +124,23 @@
             fetch('/api/requests')
                 .then(r => r.json())
                 .then(requests => {
+                    console.log("Requests loaded:", requests);
                     const container = document.getElementById('requests');
                     container.innerHTML = '';
                     
+                    if (requests.length === 0) {
+                        document.getElementById('noRequests').style.display = 'block';
+                        return;
+                    }
+                    
+                    document.getElementById('noRequests').style.display = 'none';
+                    
                     requests.forEach(req => {
                         const card = document.createElement('div');
-                        card.className = 'col-md-4';
+                        card.className = 'col-md-4 mb-4';
                         card.innerHTML = `
                             <div class="card">
-                                <img src="${req.image_url}" class="card-img-top" alt="${req.title}">
+                                <img src="${req.image_url}" class="card-img-top" alt="${req.title}" onerror="this.src='https://via.placeholder.com/300x450?text=No+Image'">
                                 <div class="card-body">
                                     <h5>${req.title}</h5>
                                     <p>Requested by: ${req.user_id}</p>
@@ -118,11 +154,21 @@
                         `;
                         container.appendChild(card);
                     });
+                })
+                .catch(err => {
+                    console.error("Error loading requests:", err);
+                    document.getElementById('noRequests').style.display = 'block';
+                    document.getElementById('noRequests').textContent = 'Error loading requests: ' + err.message;
                 });
         }
 
         // Approve request (admin only)
         function approve(requestId) {
+            if (!currentUserId) {
+                alert("You must be logged in to approve requests");
+                return;
+            }
+            
             fetch(`/api/approve/${requestId}`, {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
@@ -131,13 +177,14 @@
             .then(r => r.json())
             .then(data => {
                 if (data.status === 'success') {
+                    alert('Request approved successfully!');
                     loadRequests();
+                } else {
+                    alert('Error: ' + (data.error || 'Unknown error'));
                 }
-            });
+            })
+            .catch(err => console.error("Error approving request:", err));
         }
-
-        // Initial load
-        loadRequests();
     </script>
 </body>
 </html>

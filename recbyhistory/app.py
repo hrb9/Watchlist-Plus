@@ -95,6 +95,13 @@ def run_monthly_task(user_id: str):
     """
     try:
         db = Database(user_id)
+        
+        # Check if we already have recommendations and clear them first
+        cursor = db.conn.cursor()
+        cursor.execute('DELETE FROM ai_recommendations WHERE group_id="all"')
+        db.conn.commit()
+        
+        # Now generate new recommendations
         print_history_groups(db)
         logging.info(f"Monthly recommendations task executed for user {user_id}.")
     except Exception as e:
@@ -139,23 +146,20 @@ def process_all_users():
         
         times = USER_SCHEDULE[user_id]
         
-        # Add buffer time to avoid multiple runs in same day
-        buffer_hours = 2
-        
-        # Daily history check with buffer
-        if now - times['last_history'] >= timedelta(days=1, hours=buffer_hours):
+        # Daily history check with strict timing
+        if (now - times['last_history']).days >= 1:
             logging.info(f"Running daily history task for user {user_id}")
             run_history_task(user_id)
             USER_SCHEDULE[user_id]['last_history'] = now
             
-        # Weekly taste check with buffer
-        if now - times['last_taste'] >= timedelta(days=7, hours=buffer_hours):
+        # Weekly taste check with strict timing
+        if (now - times['last_taste']).days >= 7:
             logging.info(f"Running weekly taste task for user {user_id}")
             run_taste_task(user_id)
             USER_SCHEDULE[user_id]['last_taste'] = now
             
-        # Monthly recommendations check with buffer
-        if now - times['last_monthly'] >= timedelta(days=30, hours=buffer_hours):
+        # Monthly recommendations check with strict timing
+        if (now - times['last_monthly']).days >= 30:
             logging.info(f"Running monthly recommendations task for user {user_id}")
             run_monthly_task(user_id)
             USER_SCHEDULE[user_id]['last_monthly'] = now
