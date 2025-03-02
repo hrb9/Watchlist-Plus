@@ -12,64 +12,45 @@ def get_db_path():
     return os.path.join(os.getcwd(), 'auth.db')
 
 def init_db():
-    """
-    Create the auth_tokens table if it doesn't already exist.
-    """
     db_path = get_db_path()
     conn = sqlite3.connect(db_path)
     c = conn.cursor()
+    # Add admin column to auth_tokens table
+    c.execute('''
+      CREATE TABLE IF NOT EXISTS auth_tokens (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        token TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        last_used_at TIMESTAMP,
+        is_admin BOOLEAN DEFAULT 0,
+        UNIQUE(token, user_id)
+      )
+    ''')
     
-    # First check if the table exists
-    c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='auth_tokens'")
-    table_exists = c.fetchone() is not None
-    
-    if not table_exists:
-        # Create table with is_admin column
-        c.execute('''
-          CREATE TABLE IF NOT EXISTS auth_tokens (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            token TEXT NOT NULL,
-            user_id TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            last_used_at TIMESTAMP,
-            is_admin INTEGER DEFAULT 0,
-            UNIQUE(token, user_id)
-          )
-        ''')
-    else:
-        # Check if is_admin column exists, add it if not
-        try:
-            c.execute("SELECT is_admin FROM auth_tokens LIMIT 1")
-        except sqlite3.OperationalError:
-            # Column doesn't exist, add it
-            c.execute("ALTER TABLE auth_tokens ADD COLUMN is_admin INTEGER DEFAULT 0")
-    
+    # Check if we have any users - if not, next login will be admin
+    c.execute('SELECT COUNT(*) FROM auth_tokens')
+    count = c.fetchone()[0]
+    if count == 0:
+        # Create a flag file to mark that next user will be admin
+        with open('first_user.flag', 'w') as f:
+            f.write('1')
+            
     conn.commit()
     conn.close()
 
 init_db()  # Initialize the database
 
 def store_token_usage(token, user_id, is_admin=False):
-    """
-    Insert or update the user's token in auth.db.
-    """
-    db_path = get_db_path()
-    conn = sqlite3.connect(db_path)
+    path = get_db_path()
+    conn = sqlite3.connect(path)
     c = conn.cursor()
-    
-    # Check if this is first user (admin)
-    if not is_admin:
-        c.execute('SELECT COUNT(*) FROM auth_tokens')
-        is_admin = c.fetchone()[0] == 0
-    
     c.execute('''
       INSERT OR REPLACE INTO auth_tokens (token, user_id, created_at, last_used_at, is_admin)
       VALUES (?, ?, ?, ?, ?)
-    ''', (token, user_id, datetime.now(), datetime.now(), 1 if is_admin else 0))
-    
+    ''', (token, user_id, datetime.now(), datetime.now(), is_admin))
     conn.commit()
     conn.close()
-    return is_admin
 
 def get_token_for_user(user_id):
     path = get_db_path()
@@ -127,46 +108,43 @@ def activate_script():
 
 @app.route('/check_token/<pin_id>', methods=['GET'])
 def check_token(pin_id):
-    """
-    GET endpoint to check if the pin_id has yielded an authToken from Plex.
-    If so, store it in auth.db.
-    """
-    try:
-        unique_client_id = "PlexWatchListPlusByBaramFlix0099999"
-        r = requests.get(
-            f"https://plex.tv/api/v2/pins/{pin_id}",
-            headers={"Accept": "application/json"},
-            params={"X-Plex-Client-Identifier": unique_client_id}
-        )
-        r.raise_for_status()
-        r_json = r.json()
-        auth_token = r_json.get("authToken")
+    unique_client_id = "PlexWatchListPlusByBaramFlix0099999"
+    r = requests.get(
+        f"https://plex.tv/api/v2/pins/{pin_id}",
+        headers={"Accept": "application/json"},
+        params={"X-Plex-Client-Identifier": unique_client_id}
+    )
+    r_json = r.json()
+    auth_token = r_json.get("authToken")
+    if auth_token:
+        plex_account = MyPlexAccount(token=auth_token)
+        user_id = plex_account.username
         
-        if auth_token:
-            # Use Plex API to get username
-            account = MyPlexAccount(token=auth_token)
-            user_id = account.username
-            
-            # Store token and check if admin
-            is_admin = store_token_usage(auth_token, user_id)
-            
-            return jsonify({
-                'auth_token': auth_token,
-                'user_id': user_id,
-                'is_admin': is_admin,
-                'status': 'success'
-            })
-        else:
-            return jsonify({
-                'auth_token': None,
-                'status': 'pending'
-            })
-    except Exception as e:
-        print(f"Error in check_token: {str(e)}")
+        # Check if this is first user (admin)
+        conn = sqlite3.connect(get_db_path())
+        c = conn.cursor()
+        c.execute('SELECT COUNT(*) FROM auth_tokens')
+        is_first_user = c.fetchone()[0] == 0
+        
+        # Store with admin status
+        c.execute('''
+            INSERT OR REPLACE INTO auth_tokens 
+            (token, user_id, created_at, last_used_at, is_admin) 
+            VALUES (?, ?, ?, ?, ?)
+        ''', (auth_token, user_id, datetime.now(), datetime.now(), is_first_user))
+        conn.commit()
+        conn.close()
+        
+        return jsonify({
+            'auth_token': auth_token,
+            'user_id': user_id,
+            'is_admin': is_first_user,
+            'status': 'success'
+        })
+    else:
         return jsonify({
             'auth_token': None,
-            'status': 'error',
-            'error': str(e)
+            'status': 'pending'
         })
 
 @app.route('/get_user_info/<token>', methods=['GET'])
@@ -298,21 +276,11 @@ def connect():
         if not token:
             return jsonify({'error': 'Token not found for user'}), 404
 
-        # Check admin status
-        db_path = get_db_path()
-        conn = sqlite3.connect(db_path)
-        c = conn.cursor()
-        c.execute('SELECT is_admin FROM auth_tokens WHERE user_id = ?', (user_id,))
-        result = c.fetchone()
-        is_admin = bool(result and result[0])
-        conn.close()
-
         if connection_type == 'account':
             # using plexapi to retrieve some account info if needed
             account = MyPlexAccount(token=token)
             return jsonify({
                 'token': token,
-                'is_admin': is_admin,
                 'account': {
                     'username': account.username,
                     'email': account.email
@@ -323,25 +291,7 @@ def connect():
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
-
-@app.route('/check_admin', methods=['POST'])
-def check_admin():
-    """Check if a user is an admin"""
-    data = request.json
-    user_id = data.get('user_id')
-    
-    if not user_id:
-        return jsonify({'is_admin': False})
-        
-    db_path = get_db_path()
-    conn = sqlite3.connect(db_path)
-    c = conn.cursor()
-    c.execute('SELECT is_admin FROM auth_tokens WHERE user_id = ?', (user_id,))
-    result = c.fetchone()
-    conn.close()
-    
-    is_admin = bool(result and result[0])
-    return jsonify({'is_admin': is_admin})
+   
 
 if __name__ == '__main__':
     # Default port 5332
