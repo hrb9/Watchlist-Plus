@@ -120,25 +120,19 @@ def check_token(pin_id):
         plex_account = MyPlexAccount(token=auth_token)
         user_id = plex_account.username
         
-        # Check if this is first user (admin)
-        conn = sqlite3.connect(get_db_path())
-        c = conn.cursor()
-        c.execute('SELECT COUNT(*) FROM auth_tokens')
-        is_first_user = c.fetchone()[0] == 0
+        # Check if this should be admin
+        is_admin = False
+        if os.path.exists('first_user.flag'):
+            is_admin = True
+            os.remove('first_user.flag')
         
         # Store with admin status
-        c.execute('''
-            INSERT OR REPLACE INTO auth_tokens 
-            (token, user_id, created_at, last_used_at, is_admin) 
-            VALUES (?, ?, ?, ?, ?)
-        ''', (auth_token, user_id, datetime.now(), datetime.now(), is_first_user))
-        conn.commit()
-        conn.close()
+        store_token_usage(auth_token, user_id, is_admin)
         
         return jsonify({
             'auth_token': auth_token,
             'user_id': user_id,
-            'is_admin': is_first_user,
+            'is_admin': is_admin,
             'status': 'success'
         })
     else:
@@ -296,3 +290,4 @@ def connect():
 if __name__ == '__main__':
     # Default port 5332
     app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5332)), debug=True)
+    
