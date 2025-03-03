@@ -83,8 +83,26 @@ def run_taste_task(user_id: str):
     """
     try:
         db = Database(user_id)
+        
+        # Generate new taste
         print_history_groups(db)
-        logging.info(f"Taste task executed for user {user_id}.")
+        
+        # Now delete old taste records, keeping only the latest
+        cursor = db.conn.cursor()
+        latest_taste = cursor.execute(
+            'SELECT id FROM user_taste WHERE user_name = ? ORDER BY updated_at DESC LIMIT 1', 
+            (user_id,)
+        ).fetchone()
+        
+        if latest_taste:
+            # Delete all other tastes for this user
+            cursor.execute(
+                'DELETE FROM user_taste WHERE user_name = ? AND id != ?', 
+                (user_id, latest_taste[0])
+            )
+            db.conn.commit()
+            
+        logging.info(f"Taste task executed for user {user_id}, old taste records deleted.")
     except Exception as e:
         logging.error(f"Error in taste task for user {user_id}: {e}")
 
@@ -93,7 +111,12 @@ def run_monthly_task(user_id: str):
     מריץ יצירת המלצות חודשיות למשתמש.
     אינו כותב היסטוריה חדשה, רק משתמש בנתונים שכבר קיימים בטבלה.
     """
+    global RUNNING_TASKS
+    
     try:
+        # Mark task as running
+        RUNNING_TASKS[user_id] = True
+        
         db = Database(user_id)
         
         # Check if we already have recommendations and clear them first
@@ -106,9 +129,14 @@ def run_monthly_task(user_id: str):
         logging.info(f"Monthly recommendations task executed for user {user_id}.")
     except Exception as e:
         logging.error(f"Error in monthly task for user {user_id}: {e}")
+    finally:
+        # Always remove from running tasks when done
+        RUNNING_TASKS.pop(user_id, None)
 
 # גלובלי: נזכור מתי בפעם האחרונה הרצנו משימות לכל user_id
 USER_SCHEDULE = {}
+# גלובלי: נעקוב אחרי תהליכים שרצים כרגע
+RUNNING_TASKS = {}
 
 def get_all_users_from_plexauth():
     """
@@ -293,12 +321,34 @@ def get_user_history(user_id: str):
 def get_monthly_recommendations(user_id: str):
     """
     מחזיר המלצות חודשיות (מקראיות מתוך ai_recommendations),
-    ללא כתיבת היסטוריה חדשה.
+    ללא כתיבת היסטוריה חדשה. הפונקציה מחזירה רק המלצות מ-30 ימים אחרונים.
     """
     db = Database(user_id)
     cursor = db.conn.cursor()
-    cursor.execute('SELECT * FROM ai_recommendations WHERE group_id="all"')
+    
+    # Calculate date 30 days ago
+    thirty_days_ago = (datetime.utcnow() - timedelta(days=30)).strftime('%Y-%m-%d %H:%M:%S')
+    
+    # Filter recommendations by date (within last 30 days)
+    cursor.execute('SELECT * FROM ai_recommendations WHERE group_id="all" AND created_at >= ?', 
+                  (thirty_days_ago,))
     rows = cursor.fetchall()
+    
+    # If no recent recommendations, check if we should generate new ones
+    if len(rows) == 0 and user_id not in RUNNING_TASKS:
+        logging.info(f"No recent recommendations for user {user_id}. Generating new ones.")
+        # Mark that task is running
+        RUNNING_TASKS[user_id] = True
+        try:
+            # Generate new recommendations
+            run_monthly_task(user_id)
+            # Fetch the newly generated recommendations
+            cursor.execute('SELECT * FROM ai_recommendations WHERE group_id="all"')
+            rows = cursor.fetchall()
+        finally:
+            # Always clear the running flag
+            RUNNING_TASKS.pop(user_id, None)
+    
     recs = []
     for row in rows:
         recs.append({
