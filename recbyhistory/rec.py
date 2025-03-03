@@ -63,15 +63,17 @@ def get_ai_recommendations(all_groups_history, user_taste):
         "The watch history is provided as:\n\n"
         "Watch History - Title: <title>, IMDB ID: <imdbID>, User Rating: <userRating>\n\n"
         f"Your task is to recommend {NUM_MOVIES} movies and {NUM_SERIES} TV series that the user will enjoy. "
-        "Do NOT recommend items that appear in the watch history. Return the recommendations as a JSON array with keys 'title', 'imdb_id', and 'image_url'."
+        "Do NOT recommend items that appear in the watch history. "
+        "IMPORTANT: You MUST return ONLY a valid JSON array with objects containing 'title', 'imdb_id', and 'image_url'. "
+        "Do not include any explanation, commentary, or markdown formatting like ```json."
     )
     config = GenerateContentConfig(
         system_instruction=system_instruction,
-        temperature=1,
+        temperature=0.7,  # Reduced from 1.0 to make output more consistent
         top_p=0.95,
         top_k=40,
         max_output_tokens=8192,
-        response_mime_type="text/plain",
+        response_mime_type="application/json",  # Changed to application/json
         tools=[google_search_tool],
     )
     response = client.models.generate_content(
@@ -115,9 +117,36 @@ def update_recommendations_with_images(recommendations):
     return updated
 
 def clean_json_output(text):
+    """Improved function to extract JSON from AI responses"""
+    if not text or text.isspace():
+        print("Warning: Empty response from AI")
+        return "[]"
+        
+    # First try the standard cleaning
     cleaned = re.sub(r"^```(json)?", "", text, flags=re.MULTILINE)
     cleaned = re.sub(r"```$", "", cleaned, flags=re.MULTILINE)
-    return cleaned.strip()
+    cleaned = cleaned.strip()
+    
+    # Check if we have what looks like JSON
+    if cleaned and (cleaned.startswith('[') or cleaned.startswith('{')):
+        return cleaned
+        
+    # Try to find JSON array within the text using regex
+    json_match = re.search(r'\[\s*{.*}\s*\]', text, re.DOTALL)
+    if json_match:
+        return json_match.group(0)
+    
+    # Try to extract just the part between opening and closing brackets
+    try:
+        start_idx = text.find('[')
+        end_idx = text.rfind(']')
+        if start_idx >= 0 and end_idx > start_idx:
+            return text[start_idx:end_idx+1]
+    except:
+        pass
+    
+    print("Warning: Could not find valid JSON in response")
+    return "[]"  # Return empty array as fallback
 
 def filter_new_recommendations(recommendations, watch_history):
     watched_imdbs = {item[2] for item in watch_history}
@@ -162,11 +191,36 @@ def print_history_groups(db):
     print(final_recommendations_text)
     
     cleaned_text = clean_json_output(final_recommendations_text)
+    
+    # Try multiple parsing strategies
+    recommendations = []
     try:
         recommendations = json.loads(cleaned_text)
     except json.JSONDecodeError as je:
-        print("Error parsing JSON from AI recommendations:", je)
-        recommendations = []
+        print(f"Error parsing JSON from AI recommendations: {je}")
+        
+        # Try to fix common JSON issues
+        try:
+            # Replace single quotes with double quotes
+            fixed_text = cleaned_text.replace("'", '"')
+            recommendations = json.loads(fixed_text)
+            print("Successfully parsed JSON after fixing quotes")
+        except json.JSONDecodeError:
+            # Try just extracting items with imdb_id using regex
+            print("Attempting to extract recommendations with regex...")
+            pattern = r'{[^{}]*"imdb_id"[^{}]*}'
+            matches = re.findall(pattern, cleaned_text)
+            if matches:
+                try:
+                    collected_items = "[" + ",".join(matches) + "]"
+                    recommendations = json.loads(collected_items)
+                    print(f"Extracted {len(recommendations)} recommendations with regex")
+                except:
+                    print("Failed to parse extracted items")
+                    recommendations = []
+            else:
+                print("No items found with regex, using empty list")
+                recommendations = []
     
     updated_recommendations = update_recommendations_with_images(recommendations)
     new_recommendations = filter_new_recommendations(updated_recommendations, unique_items)
