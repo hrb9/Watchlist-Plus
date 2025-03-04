@@ -525,18 +525,30 @@ def send_request_to_overseer(imdb_id, media_type="movie"):
     """
     overseerr_url = os.environ.get("OVERSEERR_URL", "http://overseerr:5055")
     
-    # Set the correct endpoint based on media type
-    endpoint = "movie" if media_type.lower() == "movie" else "tv"
+    # First try as movie (either by specified media_type or default)
+    first_type = "movie" if media_type.lower() == "movie" else "show"
+    fallback_type = "show" if first_type == "movie" else "movie"
     
     try:
-        r = requests.post(f"{overseerr_url}/api/v1/request/{endpoint}", 
+        # Try with first media type (usually movie)
+        r = requests.post(f"{overseerr_url}/api/v1/request/{first_type}", 
                          json={"imdbId": imdb_id})
         r.raise_for_status()
-        logging.info(f"Successfully sent {media_type} request to Overseerr for {imdb_id}")
+        logging.info(f"Successfully sent {first_type} request to Overseerr for {imdb_id}")
         return r.json()
     except Exception as e:
-        logging.error(f"Error sending {media_type} request to Overseerr for {imdb_id}: {e}")
-        return {"error": str(e)}
+        logging.warning(f"Failed to add as {first_type}, trying as {fallback_type}: {e}")
+        
+        try:
+            # Try with fallback type (usually tv)
+            r = requests.post(f"{overseerr_url}/api/v1/request/{fallback_type}", 
+                             json={"imdbId": imdb_id})
+            r.raise_for_status()
+            logging.info(f"Successfully sent {fallback_type} request to Overseerr for {imdb_id}")
+            return r.json()
+        except Exception as e2:
+            logging.error(f"Error sending requests to Overseerr for {imdb_id} (tried both types): {e2}")
+            return {"error": str(e2)}
 
 @app.route('/api/users', methods=['GET'])
 def get_users():
