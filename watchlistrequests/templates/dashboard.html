@@ -47,15 +47,31 @@
 
         // Check admin status on page load
         if (currentUserId) {
+            console.log("Checking admin status for user:", currentUserId);
+            
+            // Add a visual indicator on the page
+            const debugInfo = document.createElement('div');
+            debugInfo.className = 'alert alert-info mt-2';
+            debugInfo.innerHTML = `Checking admin status for: <strong>${currentUserId}</strong>...`;
+            document.querySelector('.container').prepend(debugInfo);
+            
             fetch('/api/check_admin', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({user_id: currentUserId})
             })
-            .then(r => r.json())
+            .then(r => {
+                console.log("Admin check response status:", r.status);
+                return r.json();
+            })
             .then(data => {
-                console.log("Admin check result:", data);
+                console.log("Admin check full response:", data);
                 isAdmin = data.is_admin;
+                
+                // Update the debug info
+                debugInfo.className = isAdmin ? 'alert alert-success mt-2' : 'alert alert-warning mt-2';
+                debugInfo.innerHTML = `User <strong>${currentUserId}</strong> admin status: <strong>${isAdmin ? 'YES' : 'NO'}</strong>`;
+                
                 if (isAdmin) {
                     document.getElementById('adminPanel').style.display = 'block';
                     loadUsers();
@@ -64,7 +80,8 @@
             })
             .catch(err => {
                 console.error("Error checking admin status:", err);
-                // Still try to load requests even if admin check fails
+                debugInfo.className = 'alert alert-danger mt-2';
+                debugInfo.innerHTML = `Error checking admin status for <strong>${currentUserId}</strong>: ${err.message}`;
                 loadRequests();
             });
         } else {

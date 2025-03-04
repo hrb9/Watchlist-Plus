@@ -458,14 +458,26 @@ def check_admin():
     data = request.json
     user_id = data.get('user_id')
     
+    # Add detailed logging
+    logging.info(f"Checking admin status for user_id: {user_id}")
+    
     plexauth_url = os.environ.get("PLEXAUTH_URL", "http://plexauthgui:5332")
     try:
+        # Log the request we're about to make
+        logging.info(f"Making request to {plexauth_url}/connect for user {user_id}")
+        
         r = requests.post(f"{plexauth_url}/connect", 
                          json={"user_id": user_id, "type": "account"})
         r.raise_for_status()
         data = r.json()
-        return jsonify({"is_admin": data.get("is_admin", False)})
+        
+        # Log the response
+        is_admin = data.get("is_admin", False)
+        logging.info(f"Admin check for {user_id}: {is_admin}")
+        
+        return jsonify({"is_admin": is_admin})
     except Exception as e:
+        logging.error(f"Error checking admin status for {user_id}: {e}")
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/auto_approval', methods=['POST'])
@@ -506,6 +518,25 @@ def get_users():
         r = requests.get(f"{plexauth_url}/users")
         r.raise_for_status()
         return jsonify(r.json())
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/test_admin/<user_id>')
+def test_admin(user_id):
+    """Direct test endpoint for admin status"""
+    plexauth_url = os.environ.get("PLEXAUTH_URL", "http://plexauthgui:5332")
+    try:
+        r = requests.post(f"{plexauth_url}/connect", 
+                         json={"user_id": user_id, "type": "account"})
+        full_response = r.json()
+        
+        # Create a detailed response for debugging
+        return jsonify({
+            "user_id": user_id,
+            "is_admin": full_response.get("is_admin", False),
+            "full_response": full_response,
+            "plexauth_url": plexauth_url
+        })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
