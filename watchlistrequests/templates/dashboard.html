@@ -1,207 +1,188 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Watchlist Requests Dashboard</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <title>All the content the AI found for me to watch...</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/css/bootstrap.min.css" rel="stylesheet">css/bootstrap.min.css" rel="stylesheet">css/bootstrap.min.css" rel="stylesheet">
     <style>
-        body { background: #1a1a1a; color: white; }
-        .card { background: #2a2a2a; margin-bottom: 20px; }
+        body { background: #1a1a1a; color: white; }y { background: #1a1a1a; color: white; }y { background: #1a1a1a; color: white; }
+        .card { background: #2a2a2a; margin-bottom: 20px; } 20px; } 20px; }
         .admin-panel { display: none; }
     </style>
 </head>
 <body>
-    <div class="container mt-4">
-        <h2>Watchlist Requests Dashboard</h2>
+    <div class="container mt-4">iv class="container mt-4">iv class="container mt-4">
+        <h2>All the content the AI found for me to watch...</h2>AI found for me to watch...</h2>AI found for me to watch...</h2>
         
-        <!-- Admin Panel -->
-        <div id="adminPanel" class="admin-panel mb-4">
-            <h3>Admin Controls</h3>
+        <!-- Admin Panel - commented out
+        <div id="adminPanel" class="admin-panel mb-4"><div id="adminPanel" class="admin-panel mb-4"><div id="adminPanel" class="admin-panel mb-4">
+            <h3>Admin Controls</h3>ls</h3>ls</h3>
             <div class="card p-3">
-                <h4>Auto-Approval Management</h4>
-                <select id="userSelect" class="form-control mb-2">
-                    <option value="">Select User</option>
+                <h4>Auto-Approval Management</h4>anagement</h4>anagement</h4>
+                <select id="userSelect" class="form-control mb-2">lect" class="form-control mb-2">lect" class="form-control mb-2">
+                    <option value="">Select User</option>/option>/option>
                 </select>
                 <div class="form-check mb-2">
-                    <input class="form-check-input" type="checkbox" id="autoApprovalCheck">
-                    <label class="form-check-label" for="autoApprovalCheck">
+                    <input class="form-check-input" type="checkbox" id="autoApprovalCheck">t class="form-check-input" type="checkbox" id="autoApprovalCheck">t class="form-check-input" type="checkbox" id="autoApprovalCheck">
+                    <label class="form-check-label" for="autoApprovalCheck">label" for="autoApprovalCheck">label" for="autoApprovalCheck">
                         Enable Auto-Approval
                     </label>
                 </div>
-                <button onclick="setAutoApproval()" class="btn btn-primary">Save</button>
+                <button onclick="setAutoApproval()" class="btn btn-primary">Save</button>ick="setAutoApproval()" class="btn btn-primary">Save</button>ick="setAutoApproval()" class="btn btn-primary">Save</button>
             </div>
         </div>
+        -->
 
-        <!-- Requests List -->
-        <div id="requests" class="row"></div>
-        <div id="noRequests" class="alert alert-info" style="display:none">
-            No watchlist requests found. Make a request from the recommendations page.
+        <!-- Content List -->        <!-- Content List -->        <!-- Content List -->
+        <div id="requests" class="row"></div>ss="row"></div>ss="row"></div>
+        <div id="noRequests" class="alert alert-info" style="display:none">rt-info" style="display:none">rt-info" style="display:none">
+            No content found. Check back later.
         </div>
     </div>
     
-    <script>
-        // Store user ID from local storage or URL
-        let currentUserId = localStorage.getItem('user_id') || new URLSearchParams(window.location.search).get('user_id');
+    <script><script><script>
+        // Store user ID from local storage or URLtore user ID from local storage or URLtore user ID from local storage or URL
+        let currentUserId = localStorage.getItem('user_id') || new URLSearchParams(window.location.search).get('userid');user_id') || new URLSearchParams(window.location.search).get('userid');user_id') || new URLSearchParams(window.location.search).get('userid');
         let isAdmin = false;
         
-        console.log("Current user ID:", currentUserId);
+        // Load content immediately// Load content immediately// Load content immediately
+        loadRequests();
 
-        // Check admin status on page load
+        // Hidden admin check functionality - still runs in backgroundy - still runs in backgroundy - still runs in background
         if (currentUserId) {
-            console.log("Checking admin status for user:", currentUserId);
-            
-            // Add a visual indicator on the page
-            const debugInfo = document.createElement('div');
-            debugInfo.className = 'alert alert-info mt-2';
-            debugInfo.innerHTML = `Checking admin status for: <strong>${currentUserId}</strong>...`;
-            document.querySelector('.container').prepend(debugInfo);
-            
             fetch('/api/check_admin', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({user_id: currentUserId})
+                method: 'POST',    method: 'POST',    method: 'POST',
+                headers: {'Content-Type': 'application/json'},ation/json'},ation/json'},
+                body: JSON.stringify({user_id: currentUserId})})})
             })
-            .then(r => {
-                console.log("Admin check response status:", r.status);
-                return r.json();
-            })
+            .then(r => r.json())
             .then(data => {
-                console.log("Admin check full response:", data);
-                isAdmin = data.is_admin;
-                
-                // Update the debug info
-                debugInfo.className = isAdmin ? 'alert alert-success mt-2' : 'alert alert-warning mt-2';
-                debugInfo.innerHTML = `User <strong>${currentUserId}</strong> admin status: <strong>${isAdmin ? 'YES' : 'NO'}</strong>`;
-                
+                isAdmin = data.is_admin;    isAdmin = data.is_admin;    isAdmin = data.is_admin;
                 if (isAdmin) {
-                    document.getElementById('adminPanel').style.display = 'block';
-                    loadUsers();
-                }
-                loadRequests();
+                    // Admin functionality hiddennctionality hiddennctionality hidden
+                    // document.getElementById('adminPanel').style.display = 'block';tyle.display = 'block';tyle.display = 'block';
+                    // loadUsers();
+                }  }  }
             })
             .catch(err => {
-                console.error("Error checking admin status:", err);
-                debugInfo.className = 'alert alert-danger mt-2';
-                debugInfo.innerHTML = `Error checking admin status for <strong>${currentUserId}</strong>: ${err.message}`;
-                loadRequests();
-            });
-        } else {
-            console.log("No user ID found, showing all requests");
-            loadRequests();
+                console.error("Error checking admin status:", err);rror checking admin status:", err);rror checking admin status:", err);
+            });;;
         }
 
-        // Load users for admin panel
-        function loadUsers() {
+        /* Admin functions - commented oututut
+        function loadUsers() { loadUsers() { loadUsers() {
             fetch('/api/users')
                 .then(r => r.json())
                 .then(data => {
-                    console.log("Users loaded:", data);
-                    const select = document.getElementById('userSelect');
+                    console.log("Users loaded:", data);    console.log("Users loaded:", data);    console.log("Users loaded:", data);
+                    const select = document.getElementById('userSelect');ct = document.getElementById('userSelect');ct = document.getElementById('userSelect');
                     data.users.forEach(user => {
-                        const option = document.createElement('option');
-                        option.value = user;
-                        option.textContent = user;
-                        select.appendChild(option);
+                        const option = document.createElement('option');tion = document.createElement('option');tion = document.createElement('option');
+                        option.value = user;       option.value = user;       option.value = user;
+                        option.textContent = user;textContent = user;textContent = user;
+                        select.appendChild(option);          select.appendChild(option);          select.appendChild(option);
                     });
                 })
-                .catch(err => console.error("Error loading users:", err));
+                .catch(err => console.error("Error loading users:", err));:", err));:", err));
         }
 
-        // Set auto-approval for user
-        function setAutoApproval() {
-            const userId = document.getElementById('userSelect').value;
-            const enabled = document.getElementById('autoApprovalCheck').checked;
+        function setAutoApproval() {n setAutoApproval() {n setAutoApproval() {
+            const userId = document.getElementById('userSelect').value;t userId = document.getElementById('userSelect').value;t userId = document.getElementById('userSelect').value;
+            const enabled = document.getElementById('autoApprovalCheck').checked;heck').checked;heck').checked;
             
-            if (!userId) {
-                alert("Please select a user");
+            if (!userId) {   if (!userId) {   if (!userId) {
+                alert("Please select a user");                alert("Please select a user");                alert("Please select a user");
                 return;
             }
             
-            fetch('/api/auto_approval', {
+            fetch('/api/auto_approval', {l', {l', {
                 method: 'POST',
-                headers: {'Content-Type': 'application/json'},
+                headers: {'Content-Type': 'application/json'},json'},json'},
                 body: JSON.stringify({
                     admin_id: currentUserId,
                     user_id: userId,
                     enabled: enabled
                 })
             })
-            .then(r => r.json())
-            .then(data => {
+            .then(r => r.json())r.json())r.json())
+            .then(data => {data => {data => {
                 if (data.status === 'success') {
-                    alert('Auto-approval setting updated for ' + userId);
-                } else {
-                    alert('Error: ' + (data.error || 'Unknown error'));
+                    alert('Auto-approval setting updated for ' + userId);           alert('Auto-approval setting updated for ' + userId);           alert('Auto-approval setting updated for ' + userId);
+                } else {                } else {                } else {
+                    alert('Error: ' + (data.error || 'Unknown error')); (data.error || 'Unknown error')); (data.error || 'Unknown error'));
                 }
             })
             .catch(err => console.error("Error setting auto-approval:", err));
         }
+        */
 
-        // Load and display requests
-        function loadRequests() {
-            fetch('/api/requests')
+        // Load and display contentplay contentplay content
+        function loadRequests() {ion loadRequests() {ion loadRequests() {
+            fetch('/api/requests')fetch('/api/requests')fetch('/api/requests')
                 .then(r => r.json())
-                .then(requests => {
-                    console.log("Requests loaded:", requests);
-                    const container = document.getElementById('requests');
-                    container.innerHTML = '';
+                .then(requests => {=> {=> {
+                    const container = document.getElementById('requests');'requests');'requests');
+                    container.innerHTML = '';L = '';L = '';
                     
-                    if (requests.length === 0) {
-                        document.getElementById('noRequests').style.display = 'block';
-                        return;
-                    }
+                    if (requests.length === 0) {gth === 0) {gth === 0) {
+                        document.getElementById('noRequests').style.display = 'block';ElementById('noRequests').style.display = 'block';ElementById('noRequests').style.display = 'block';
+                        return;      return;      return;
+                    }      }      }
                     
-                    document.getElementById('noRequests').style.display = 'none';
+                    document.getElementById('noRequests').style.display = 'none';t.getElementById('noRequests').style.display = 'none';t.getElementById('noRequests').style.display = 'none';
                     
                     requests.forEach(req => {
-                        const card = document.createElement('div');
+                        const card = document.createElement('div');const card = document.createElement('div');const card = document.createElement('div');
                         card.className = 'col-md-4 mb-4';
-                        card.innerHTML = `
-                            <div class="card">
-                                <img src="${req.image_url}" class="card-img-top" alt="${req.title}" onerror="this.src='https://via.placeholder.com/300x450?text=No+Image'">
-                                <div class="card-body">
-                                    <h5>${req.title}</h5>
-                                    <p>Requested by: ${req.user_id}</p>
-                                    <p>Status: ${req.status}</p>
-                                    ${req.status === 'pending' && isAdmin ? 
-                                        `<button onclick="approve(${req.id})" class="btn btn-success">Approve</button>` : 
+                        card.innerHTML = `       card.innerHTML = `       card.innerHTML = `
+                            <div class="card">              <div class="card">              <div class="card">
+                                <img src="${req.image_url}" class="card-img-top" alt="${req.title}" onerror="this.src='https://via.placeholder.com/300x450?text=No+Image'">p" alt="${req.title}" onerror="this.src='https://via.placeholder.com/300x450?text=No+Image'">p" alt="${req.title}" onerror="this.src='https://via.placeholder.com/300x450?text=No+Image'">
+                                <div class="card-body">                       <div class="card-body">                       <div class="card-body">
+                                    <h5>${req.title}</h5>                                    <h5>${req.title}</h5>                                    <h5>${req.title}</h5>
+                                    <!-- Request metadata commented out<!-- Request metadata commented out<!-- Request metadata commented out
+                                    <p>Requested by: ${req.user_id}</p>   <p>Requested by: ${req.user_id}</p>   <p>Requested by: ${req.user_id}</p>
+                                    <p>Status: ${req.status}</p>  <p>Status: ${req.status}</p>  <p>Status: ${req.status}</p>
+                                    ${req.status === 'pending' && isAdmin ? ${req.status === 'pending' && isAdmin ? ${req.status === 'pending' && isAdmin ? 
+                                        `<button onclick="approve(${req.id})" class="btn btn-success">Approve</button>` :      `<button onclick="approve(${req.id})" class="btn btn-success">Approve</button>` :      `<button onclick="approve(${req.id})" class="btn btn-success">Approve</button>` : 
                                         ''
                                     }
-                                </div>
+                                    -->
+                                </div>            </div>            </div>
                             </div>
                         `;
-                        container.appendChild(card);
-                    });
+                        container.appendChild(card);er.appendChild(card);er.appendChild(card);
+                    });););
                 })
                 .catch(err => {
-                    console.error("Error loading requests:", err);
-                    document.getElementById('noRequests').style.display = 'block';
-                    document.getElementById('noRequests').textContent = 'Error loading requests: ' + err.message;
+                    console.error("Error loading content:", err);console.error("Error loading content:", err);console.error("Error loading content:", err);
+                    document.getElementById('noRequests').style.display = 'block';noRequests').style.display = 'block';noRequests').style.display = 'block';
+                    document.getElementById('noRequests').textContent = 'Error loading content. Please try again later.';nt = 'Error loading content. Please try again later.';nt = 'Error loading content. Please try again later.';
                 });
         }
 
-        // Approve request (admin only)
+        /* Approval functionality - commented out
         function approve(requestId) {
             if (!currentUserId) {
                 alert("You must be logged in to approve requests");
                 return;
             }
             
-            fetch(`/api/approve/${requestId}`, {
+            fetch(`/api/approve/${requestId}`, {d}`, {d}`, {
                 method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({admin_id: currentUserId})
+                headers: {'Content-Type': 'application/json'},e': 'application/json'},e': 'application/json'},
+                body: JSON.stringify({admin_id: currentUserId})fy({admin_id: currentUserId})fy({admin_id: currentUserId})
             })
             .then(r => r.json())
-            .then(data => {
-                if (data.status === 'success') {
-                    alert('Request approved successfully!');
+            .then(data => {=> {=> {
+                if (data.status === 'success') { (data.status === 'success') { (data.status === 'success') {
+                    alert('Request approved successfully!');est approved successfully!');est approved successfully!');
                     loadRequests();
                 } else {
                     alert('Error: ' + (data.error || 'Unknown error'));
                 }
-            })
-            .catch(err => console.error("Error approving request:", err));
+            })   })   })
+            .catch(err => console.error("Error approving request:", err));            .catch(err => console.error("Error approving request:", err));            .catch(err => console.error("Error approving request:", err));
         }
+        */
     </script>
 </body>
 </html>
