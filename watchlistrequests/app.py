@@ -9,7 +9,6 @@ import time
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from plexapi.myplex import MyPlexAccount
-from plexapi.server import PlexServer
 
 app = Flask(__name__)
 
@@ -52,28 +51,40 @@ def init_scheduler():
     if scheduler is None:
         scheduler = BackgroundScheduler()
         scheduler.start()
+        
         # Schedule the recommendation fetcher to run every hour
         scheduler.add_job(fetch_all_user_recommendations, IntervalTrigger(hours=1))
-        # Run once immediately at startup
+        
+        # Schedule the pending request processor to run every 5 minutes
+        scheduler.add_job(process_pending_requests, IntervalTrigger(minutes=5))
+        
+        # Run both immediately at startup
         threading.Thread(target=fetch_all_user_recommendations).start()
-        logging.info("Scheduler initialized and recommendation fetcher scheduled")
+        threading.Thread(target=process_pending_requests).start()
+        
+        logging.info("Scheduler initialized with recommendation fetcher and request processor")
 
 def fetch_all_user_recommendations():
-    """Fetch recommendations for all users and add them to watchlist requests"""
+    """Fetch all types of recommendations for all users"""
     logging.info("Starting recommendation fetcher for all users")
     plexauth_url = os.environ.get("PLEXAUTH_URL", "http://plexauthgui:5332")
-    recbyhistory_url = os.environ.get("RECBYHISTORY_URL", "http://recbyhistory:5335")
     
     try:
-        # Get all users from plexauthgui
+        # Get all users
         r = requests.get(f"{plexauth_url}/users", timeout=10)
         r.raise_for_status()
         users = r.json().get('users', [])
         
         for user_id in users:
-            logging.info(f"Fetching recommendations for user {user_id}")
-            fetch_user_recommendations(user_id, recbyhistory_url)
-            # Add a small delay to avoid overloading services
+            logging.info(f"Processing recommendations for user {user_id}")
+            
+            # Get monthly recommendations
+            fetch_user_recommendations(user_id, os.environ.get("RECBYHISTORY_URL", "http://recbyhistory:5335"))
+            
+            # Get discovery recommendations
+            fetch_user_discovery_recommendations(user_id)
+            
+            # Small delay to avoid overloading services
             time.sleep(2)
             
     except Exception as e:
@@ -141,6 +152,102 @@ def fetch_user_recommendations(user_id, recbyhistory_url):
         
     except Exception as e:
         logging.error(f"Error fetching recommendations for user {user_id}: {e}")
+
+def fetch_user_discovery_recommendations(user_id):
+    """Fetch discovery recommendations from recbyhistory and add them to watchlist"""
+    recbyhistory_url = os.environ.get("RECBYHISTORY_URL", "http://recbyhistory:5335")
+    try:
+        # Fetch discovery recommendations
+        r = requests.get(f"{recbyhistory_url}/discovery_recommendations?user_id={user_id}", timeout=10)
+        r.raise_for_status()
+        recommendations = r.json().get('recommendations', [])
+        
+        if not recommendations:
+            logging.info(f"No discovery recommendations found for user {user_id}")
+            return
+            
+        # Process each recommendation (similar to fetch_user_recommendations)
+        conn = sqlite3.connect('watchlist_requests.db')
+        c = conn.cursor()
+        
+        # Check auto-approval setting
+        c.execute('SELECT enabled FROM auto_approvals WHERE user_id = ?', (user_id,))
+        result = c.fetchone()
+        auto_approve = result and result[0] == 1
+        
+        for rec in recommendations:
+            imdb_id = rec.get('imdb_id')
+            if not imdb_id:
+                continue
+                
+            # Skip if already in requests
+            c.execute('SELECT id FROM requests WHERE imdb_id = ? AND user_id = ?', (imdb_id, user_id))
+            if c.fetchone():
+                continue
+                
+            # Add as request (with discovery tag)
+            c.execute('''
+            INSERT INTO requests (imdb_id, title, image_url, user_id, status, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ''', (imdb_id, rec.get('title', 'Unknown'), rec.get('image_url', ''), 
+                 user_id, 'auto_approved' if auto_approve else 'pending', datetime.now()))
+            
+            # Process immediately if auto-approved
+            if auto_approve:
+                conn.commit()
+                add_to_plex_watchlist(user_id, imdb_id)
+                
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logging.error(f"Error fetching discovery recs for {user_id}: {e}")
+
+def process_pending_requests():
+    """Process all pending requests and add them to watchlist every 5 minutes"""
+    logging.info("Processing pending watchlist requests")
+    
+    try:
+        # Connect to database
+        conn = sqlite3.connect('watchlist_requests.db')
+        c = conn.cursor()
+        
+        # Get all pending requests
+        c.execute('SELECT id, imdb_id, user_id FROM requests WHERE status = "pending"')
+        pending_requests = c.fetchall()
+        
+        if not pending_requests:
+            logging.info("No pending requests to process")
+            conn.close()
+            return
+            
+        logging.info(f"Found {len(pending_requests)} pending requests to process")
+        
+        # Process each request
+        for req_id, imdb_id, user_id in pending_requests:
+            try:
+                # Add to Plex watchlist
+                success = add_to_plex_watchlist(user_id, imdb_id)
+                
+                if success:
+                    # Update request status
+                    c.execute('''
+                    UPDATE requests 
+                    SET status = 'auto_processed', 
+                        approved_at = ?
+                    WHERE id = ?
+                    ''', (datetime.now(), req_id))
+                    logging.info(f"Auto-processed request {req_id} for user {user_id}")
+                else:
+                    logging.error(f"Failed to add request {req_id} to watchlist for user {user_id}")
+            except Exception as e:
+                logging.error(f"Error processing request {req_id}: {e}")
+                
+        # Commit all changes
+        conn.commit()
+        conn.close()
+        
+    except Exception as e:
+        logging.error(f"Error in process_pending_requests: {e}")
 
 init_db()
 init_scheduler()
@@ -401,41 +508,6 @@ def get_users():
         return jsonify(r.json())
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
-def check_new_users():
-    """Checks only for new users, runs frequently"""
-    global USER_SCHEDULE
-    
-    plexauthgui_url = os.environ.get("PLEXAUTH_URL", "http://plexauthgui:5332")
-    try:
-        r = requests.get(f"{plexauthgui_url}/users")
-        r.raise_for_status()
-        user_list = r.json().get('users', [])
-        
-        if not user_list:
-            logging.info("No users found in plexauthgui")
-            return
-            
-        now = datetime.utcnow()
-        for user_id in user_list:
-            if user_id not in USER_SCHEDULE:
-                logging.info(f"New user detected: {user_id}")
-                USER_SCHEDULE[user_id] = {
-                    'last_history': now - timedelta(days=1),
-                    'last_taste': now - timedelta(days=7),
-                    'last_monthly': now - timedelta(days=30)
-                }
-                # Run initial tasks immediately for new user
-                try:
-                    run_history_task(user_id)
-                    run_taste_task(user_id)
-                    run_monthly_task(user_id)
-                    logging.info(f"Successfully initialized tasks for new user {user_id}")
-                except Exception as e:
-                    logging.error(f"Error initializing tasks for new user {user_id}: {e}")
-                    
-    except Exception as e:
-        logging.error(f"Error in check_new_users: {e}")
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5333)
