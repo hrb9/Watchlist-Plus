@@ -8,11 +8,18 @@ import threading
 import time
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
+from plexapi.myplex import MyPlexAccount
+from plexapi.server import PlexServer
 
 app = Flask(__name__)
 
 # Global scheduler for periodic tasks
 scheduler = None
+
+# Cache for Plex connections and items
+PLEX_ACCOUNTS = {}
+PLEX_SERVERS = {}
+PLEX_ITEMS_CACHE = {}
 
 def init_db():
     conn = sqlite3.connect('watchlist_requests.db')
@@ -30,10 +37,11 @@ def init_db():
         approved_by TEXT
     )''')
     
+    # Set default value for enabled to 1 (true) to enable auto-approval by default
     c.execute('''
     CREATE TABLE IF NOT EXISTS auto_approvals (
         user_id TEXT PRIMARY KEY,
-        enabled BOOLEAN DEFAULT 0
+        enabled BOOLEAN DEFAULT 1
     )''')
     conn.commit()
     conn.close()
@@ -87,6 +95,16 @@ def fetch_user_recommendations(user_id, recbyhistory_url):
         conn = sqlite3.connect('watchlist_requests.db')
         c = conn.cursor()
         
+        # Check if user has an auto_approvals entry, create one with default enabled if not
+        c.execute('SELECT enabled FROM auto_approvals WHERE user_id = ?', (user_id,))
+        result = c.fetchone()
+        if result is None:
+            # Insert with default enabled (1)
+            c.execute('INSERT INTO auto_approvals (user_id, enabled) VALUES (?, 1)', (user_id,))
+            auto_approve = True
+        else:
+            auto_approve = result[0] == 1
+        
         for rec in recommendations:
             imdb_id = rec.get('imdb_id')
             title = rec.get('title')
@@ -102,11 +120,6 @@ def fetch_user_recommendations(user_id, recbyhistory_url):
             if existing:
                 logging.info(f"Request for {imdb_id} already exists for user {user_id}")
                 continue
-                
-            # Check if user has auto-approval
-            c.execute('SELECT enabled FROM auto_approvals WHERE user_id = ?', (user_id,))
-            result = c.fetchone()
-            auto_approve = result and result[0]
             
             status = 'auto_approved' if auto_approve else 'pending'
             
@@ -117,7 +130,6 @@ def fetch_user_recommendations(user_id, recbyhistory_url):
             ''', (imdb_id, title, image_url, user_id, status, datetime.now()))
             
             # If auto-approved, add to Plex watchlist
-            last_id = c.lastrowid
             if auto_approve:
                 conn.commit()  # Commit before calling external function
                 add_to_plex_watchlist(user_id, imdb_id)
@@ -155,7 +167,13 @@ def add_request():
     
     # Check if user has auto-approval
     c.execute('SELECT enabled FROM auto_approvals WHERE user_id = ?', (data['user_id'],))
-    auto_approve = c.fetchone() and c.fetchone()[0]
+    result = c.fetchone()
+    if result is None:
+        # Insert with default enabled (1)
+        c.execute('INSERT INTO auto_approvals (user_id, enabled) VALUES (?, 1)', (data['user_id'],))
+        auto_approve = True
+    else:
+        auto_approve = result[0] == 1
     
     status = 'auto_approved' if auto_approve else 'pending'
     
@@ -164,9 +182,12 @@ def add_request():
     VALUES (?, ?, ?, ?, ?)
     ''', (data['imdb_id'], data['title'], data['image_url'], data['user_id'], status))
     
+    last_id = c.lastrowid
+    
+    # If auto-approval is enabled, add to Plex watchlist
     if auto_approve:
-        # Call Plex API to add to watchlist
-        approve_request(c.lastrowid)
+        conn.commit()  # Commit before calling external function
+        add_to_plex_watchlist(data['user_id'], data['imdb_id'])
         
     conn.commit()
     conn.close()
@@ -184,31 +205,117 @@ def get_plex_token(user_id):
         logging.error(f"Error getting Plex token: {e}")
         return None
 
-def add_to_plex_watchlist(user_id, imdb_id):
-    """Add content to user's Plex watchlist after approval"""
+def connect_to_plex(user_id):
+    """Connect to a user's Plex account using their token"""
+    if user_id in PLEX_ACCOUNTS:
+        return PLEX_ACCOUNTS[user_id]
+    
     token = get_plex_token(user_id)
     if not token:
-        return False
+        logging.error(f"No Plex token found for user {user_id}")
+        return None
         
-    recbyhistory_url = os.environ.get("RECBYHISTORY_URL", "http://recbyhistory:5335")
     try:
-        r = requests.post(f"{recbyhistory_url}/add_to_watchlist",
-                         json={
-                             "user_id": user_id,
-                             "imdb_id": imdb_id,
-                             "media_type": "movie"  # Default to movie
-                         })
-        r.raise_for_status()
-        return r.json().get("status") == "OK"
+        account = MyPlexAccount(token=token)
+        PLEX_ACCOUNTS[user_id] = account
+        return account
     except Exception as e:
-        logging.error(f"Error adding to Plex watchlist: {e}")
+        logging.error(f"Error connecting to Plex for user {user_id}: {e}")
+        return None
+
+def get_plex_servers(user_id):
+    """Get all available Plex servers for a user"""
+    if user_id in PLEX_SERVERS:
+        return PLEX_SERVERS[user_id]
+        
+    account = connect_to_plex(user_id)
+    if not account:
+        return []
+        
+    servers = []
+    for resource in account.resources():
+        try:
+            server = resource.connect(timeout=10)
+            if server:
+                servers.append(server)
+        except Exception as e:
+            logging.error(f"Error connecting to server {resource.name}: {e}")
+            
+    PLEX_SERVERS[user_id] = servers
+    return servers
+
+def find_plex_item_by_imdb_id(user_id, imdb_id):
+    """Find a Plex item by IMDB ID across all user's servers"""
+    if user_id not in PLEX_ITEMS_CACHE:
+        PLEX_ITEMS_CACHE[user_id] = {}
+    
+    # Check if we've already found this item
+    if imdb_id in PLEX_ITEMS_CACHE[user_id]:
+        return PLEX_ITEMS_CACHE[user_id][imdb_id]
+    
+    servers = get_plex_servers(user_id)
+    for server in servers:
+        try:
+            # Search across all libraries
+            for section in server.library.sections():
+                for item in section.all():
+                    # Check if item has IMDb ID matching
+                    if hasattr(item, 'guids') and item.guids:
+                        for guid in item.guids:
+                            if guid.id == f'imdb://{imdb_id}':
+                                # Cache the item for future use
+                                PLEX_ITEMS_CACHE[user_id][imdb_id] = item
+                                return item
+        except Exception as e:
+            logging.error(f"Error searching for item {imdb_id} on server: {e}")
+    
+    return None
+
+def add_to_plex_watchlist(user_id, imdb_id):
+    """Add content to user's Plex watchlist after approval"""
+    account = connect_to_plex(user_id)
+    if not account:
+        logging.error(f"Could not connect to Plex for user {user_id}")
         return False
+    
+    try:
+        # First try to find the item in user's libraries
+        plex_item = find_plex_item_by_imdb_id(user_id, imdb_id)
+        
+        if plex_item:
+            # Add using Plex item object
+            account.addToWatchlist(plex_item)
+            logging.info(f"Added Plex item {plex_item.title} to watchlist for user {user_id}")
+        else:
+            # Add using just the IMDb ID
+            account.addToWatchlist(imdb_id)
+            logging.info(f"Added IMDb ID {imdb_id} to watchlist for user {user_id}")
+        
+        return True
+    except Exception as e:
+        logging.error(f"Error adding to Plex watchlist for user {user_id}: {e}")
+        
+        # Fallback to the existing method using recbyhistory
+        logging.info(f"Trying fallback method via recbyhistory for {imdb_id}")
+        recbyhistory_url = os.environ.get("RECBYHISTORY_URL", "http://recbyhistory:5335")
+        try:
+            r = requests.post(f"{recbyhistory_url}/add_to_watchlist",
+                             json={
+                                 "user_id": user_id,
+                                 "imdb_id": imdb_id,
+                                 "media_type": "movie"  # Default to movie
+                             })
+            r.raise_for_status()
+            return r.json().get("status") == "success"
+        except Exception as e2:
+            logging.error(f"Fallback method failed: {e2}")
+            return False
 
 @app.route('/api/approve/<int:request_id>', methods=['POST'])
 def approve_request(request_id):
-    """Approve a watchlist request and add to Plex"""
+    """Approve a watchlist request and add to Plex watchlist"""
     data = request.json
-    admin_id = data['admin_id']
+    admin_id = data.get('admin_id')
     
     conn = sqlite3.connect('watchlist_requests.db')
     c = conn.cursor()

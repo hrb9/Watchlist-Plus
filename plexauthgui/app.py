@@ -39,33 +39,33 @@ def init_db():
     conn.commit()
     conn.close()
 
-init_db()  # Initialize the database
-
-def store_token_usage(token, user_id, is_admin=False):
-    path = get_db_path()
-    conn = sqlite3.connect(path)
+    conn = sqlite3.connect('watchlist_requests.db')
     c = conn.cursor()
     c.execute('''
-      INSERT OR REPLACE INTO auth_tokens (token, user_id, created_at, last_used_at, is_admin)
-      VALUES (?, ?, ?, ?, ?)
-    ''', (token, user_id, datetime.now(), datetime.now(), is_admin))
+    CREATE TABLE IF NOT EXISTS requests (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        imdb_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        image_url TEXT,
+        user_id TEXT NOT NULL,
+        status TEXT DEFAULT 'pending',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        approved_at TIMESTAMP,
+        approved_by TEXT
+    )''')
+    
+    # Set default value for enabled to 1 (true) to enable auto-approval by default
+    c.execute('''
+    CREATE TABLE IF NOT EXISTS auto_approvals (
+        user_id TEXT PRIMARY KEY,
+        enabled BOOLEAN DEFAULT 1
+    )''')
     conn.commit()
     conn.close()
 
-def get_token_for_user(user_id):
-    path = get_db_path()
-    conn = sqlite3.connect(path)
-    c = conn.cursor()
-    c.execute('SELECT token FROM auth_tokens WHERE user_id = ?', (user_id,))
-    row = c.fetchone()
-    conn.close()
-    return row[0] if row else None
+init_db()  # Initialize the database
 
-def get_all_users():
-    path = get_db_path()
-    if not os.path.exists(path):
-        return []
-    conn = sqlite3.connect(path)
+def store_token_usage(token, user_id, is_admin=False):
     c = conn.cursor()
     c.execute('SELECT DISTINCT user_id FROM auth_tokens')
     rows = c.fetchall()
@@ -92,6 +92,26 @@ def get_plex_auth_token(app_name, unique_client_id):
     })
     auth_url = f"https://app.plex.tv/auth#?{encoded_params}"
     return pin_id, auth_url
+
+def get_all_users():
+    """Get all users from the auth database"""
+    path = get_db_path()
+    conn = sqlite3.connect(path)
+    c = conn.cursor()
+    c.execute('SELECT DISTINCT user_id FROM auth_tokens')
+    rows = c.fetchall()
+    conn.close()
+    return [row[0] for row in rows]
+
+def get_token_for_user(user_id):
+    """Get the most recent token for a specific user"""
+    path = get_db_path()
+    conn = sqlite3.connect(path)
+    c = conn.cursor()
+    c.execute('SELECT token FROM auth_tokens WHERE user_id = ? ORDER BY created_at DESC LIMIT 1', (user_id,))
+    result = c.fetchone()
+    conn.close()
+    return result[0] if result else None
 
 # === Routes for PIN auth ===
 @app.route('/')
@@ -277,10 +297,19 @@ def connect():
             return jsonify({'error': 'Token not found for user'}), 404
 
         if connection_type == 'account':
+            # Get admin status from database
+            conn = sqlite3.connect(get_db_path())
+            c = conn.cursor()
+            c.execute('SELECT is_admin FROM auth_tokens WHERE user_id = ?', (user_id,))
+            row = c.fetchone()
+            is_admin = bool(row and row[0])
+            conn.close()
+            
             # using plexapi to retrieve some account info if needed
             account = MyPlexAccount(token=token)
             return jsonify({
                 'token': token,
+                'is_admin': is_admin,  # Add admin status to the response
                 'account': {
                     'username': account.username,
                     'email': account.email
