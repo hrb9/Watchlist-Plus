@@ -4,8 +4,15 @@ import os
 from datetime import datetime, timedelta
 import requests
 import logging
+import threading
+import time
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.interval import IntervalTrigger
 
 app = Flask(__name__)
+
+# Global scheduler for periodic tasks
+scheduler = None
 
 def init_db():
     conn = sqlite3.connect('watchlist_requests.db')
@@ -31,7 +38,100 @@ def init_db():
     conn.commit()
     conn.close()
 
+def init_scheduler():
+    """Initialize and start the background scheduler"""
+    global scheduler
+    if scheduler is None:
+        scheduler = BackgroundScheduler()
+        scheduler.start()
+        # Schedule the recommendation fetcher to run every hour
+        scheduler.add_job(fetch_all_user_recommendations, IntervalTrigger(hours=1))
+        # Run once immediately at startup
+        threading.Thread(target=fetch_all_user_recommendations).start()
+        logging.info("Scheduler initialized and recommendation fetcher scheduled")
+
+def fetch_all_user_recommendations():
+    """Fetch recommendations for all users and add them to watchlist requests"""
+    logging.info("Starting recommendation fetcher for all users")
+    plexauth_url = os.environ.get("PLEXAUTH_URL", "http://plexauthgui:5332")
+    recbyhistory_url = os.environ.get("RECBYHISTORY_URL", "http://recbyhistory:5335")
+    
+    try:
+        # Get all users from plexauthgui
+        r = requests.get(f"{plexauth_url}/users", timeout=10)
+        r.raise_for_status()
+        users = r.json().get('users', [])
+        
+        for user_id in users:
+            logging.info(f"Fetching recommendations for user {user_id}")
+            fetch_user_recommendations(user_id, recbyhistory_url)
+            # Add a small delay to avoid overloading services
+            time.sleep(2)
+            
+    except Exception as e:
+        logging.error(f"Error in fetch_all_user_recommendations: {e}")
+
+def fetch_user_recommendations(user_id, recbyhistory_url):
+    """Fetch recommendations for a specific user and add them to watchlist requests"""
+    try:
+        # Fetch monthly recommendations from recbyhistory
+        r = requests.get(f"{recbyhistory_url}/monthly_recommendations?user_id={user_id}", timeout=10)
+        r.raise_for_status()
+        recommendations = r.json().get('monthly_recommendations', [])
+        
+        if not recommendations:
+            logging.info(f"No recommendations found for user {user_id}")
+            return
+            
+        # Process each recommendation
+        conn = sqlite3.connect('watchlist_requests.db')
+        c = conn.cursor()
+        
+        for rec in recommendations:
+            imdb_id = rec.get('imdb_id')
+            title = rec.get('title')
+            image_url = rec.get('image_url', '')
+            
+            if not imdb_id or not title:
+                continue
+                
+            # Check if this recommendation already exists as a request
+            c.execute('SELECT id FROM requests WHERE imdb_id = ? AND user_id = ?', (imdb_id, user_id))
+            existing = c.fetchone()
+            
+            if existing:
+                logging.info(f"Request for {imdb_id} already exists for user {user_id}")
+                continue
+                
+            # Check if user has auto-approval
+            c.execute('SELECT enabled FROM auto_approvals WHERE user_id = ?', (user_id,))
+            result = c.fetchone()
+            auto_approve = result and result[0]
+            
+            status = 'auto_approved' if auto_approve else 'pending'
+            
+            # Add the recommendation as a request
+            c.execute('''
+            INSERT INTO requests (imdb_id, title, image_url, user_id, status, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ''', (imdb_id, title, image_url, user_id, status, datetime.now()))
+            
+            # If auto-approved, add to Plex watchlist
+            last_id = c.lastrowid
+            if auto_approve:
+                conn.commit()  # Commit before calling external function
+                add_to_plex_watchlist(user_id, imdb_id)
+                
+            logging.info(f"Added recommendation {title} ({imdb_id}) for user {user_id} with status {status}")
+        
+        conn.commit()
+        conn.close()
+        
+    except Exception as e:
+        logging.error(f"Error fetching recommendations for user {user_id}: {e}")
+
 init_db()
+init_scheduler()
 
 @app.route('/')
 def dashboard():
@@ -132,8 +232,10 @@ def approve_request(request_id):
         WHERE id = ?
         ''', (datetime.now(), admin_id, request_id))
         conn.commit()
+        conn.close()
         return jsonify({'status': 'success'})
     else:
+        conn.close()
         return jsonify({'error': 'Failed to add to Plex watchlist'}), 500
 
 @app.route('/api/check_admin', methods=['POST'])

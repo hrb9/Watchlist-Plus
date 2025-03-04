@@ -8,6 +8,8 @@ plexapi
 apscheduler
 flask
 imdbmovies
+sqlite3
+
 
 
 
