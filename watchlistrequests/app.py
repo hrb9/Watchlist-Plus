@@ -143,6 +143,7 @@ def fetch_user_recommendations(user_id, recbyhistory_url):
             # If auto-approved, add to Plex watchlist
             if auto_approve:
                 conn.commit()  # Commit before calling external function
+                send_request_to_overseer(imdb_id, 'movie' if 'movie' in title.lower() else 'tv')
                 add_to_plex_watchlist(user_id, imdb_id)
                 
             logging.info(f"Added recommendation {title} ({imdb_id}) for user {user_id} with status {status}")
@@ -417,6 +418,8 @@ def add_to_plex_watchlist(user_id, imdb_id):
         except Exception as e2:
             logging.error(f"Fallback method failed: {e2}")
             return False
+        
+
 
 @app.route('/api/approve/<int:request_id>', methods=['POST'])
 def approve_request(request_id):
@@ -509,6 +512,31 @@ def set_auto_approval():
         return jsonify({"status": "success"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+def send_request_to_overseer(imdb_id, media_type="movie"):
+    """Send a request to Overseer for a specific IMDb ID for either movie or TV show
+    
+    Args:
+        imdb_id: The IMDb ID of the content
+        media_type: Either "movie" or "tv" (default: "movie")
+    
+    Returns:
+        The JSON response or error details
+    """
+    overseerr_url = os.environ.get("OVERSEERR_URL", "http://overseerr:5055")
+    
+    # Set the correct endpoint based on media type
+    endpoint = "movie" if media_type.lower() == "movie" else "tv"
+    
+    try:
+        r = requests.post(f"{overseerr_url}/api/v1/request/{endpoint}", 
+                         json={"imdbId": imdb_id})
+        r.raise_for_status()
+        logging.info(f"Successfully sent {media_type} request to Overseerr for {imdb_id}")
+        return r.json()
+    except Exception as e:
+        logging.error(f"Error sending {media_type} request to Overseerr for {imdb_id}: {e}")
+        return {"error": str(e)}
 
 @app.route('/api/users', methods=['GET'])
 def get_users():
