@@ -66,11 +66,17 @@ def init_db():
 init_db()  # Initialize the database
 
 def store_token_usage(token, user_id, is_admin=False):
+    """Update the last_used_at timestamp for a token"""
+    conn = sqlite3.connect(get_db_path())
     c = conn.cursor()
-    c.execute('SELECT DISTINCT user_id FROM auth_tokens')
-    rows = c.fetchall()
+    # Update the last_used_at timestamp for this token
+    c.execute("""
+        UPDATE auth_tokens 
+        SET last_used_at = ? 
+        WHERE token = ? AND user_id = ?
+    """, (datetime.now(), token, user_id))
+    conn.commit()
     conn.close()
-    return [r[0] for r in rows]
 
 def get_plex_auth_token(app_name, unique_client_id):
     r = requests.post(
