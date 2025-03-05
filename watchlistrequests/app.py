@@ -143,7 +143,7 @@ def fetch_user_recommendations(user_id, recbyhistory_url):
             # If auto-approved, add to Plex watchlist
             if auto_approve:
                 conn.commit()  # Commit before calling external function
-                send_request_to_overseer(imdb_id, 'movie' if 'movie' in title.lower() else 'tv')
+                request_media_from_overseer(imdb_id, 'movie' if 'movie' in title.lower() else 'tv')
                 add_to_plex_watchlist(user_id, imdb_id)
                 
             logging.info(f"Added recommendation {title} ({imdb_id}) for user {user_id} with status {status}")
@@ -517,50 +517,84 @@ import os
 import requests
 import logging
 
-def send_request_to_overseer(imdb_id, media_type="movie"):
-    """Send a request to Overseerr for specific content based on IMDb ID for either movie or TV show.
+def request_media_from_overseer(imdb_id, media_type="movie"):
+    """
+    Sends a request to Overseerr for a media item using its IMDb ID.
+    
+    This function first searches Overseerr to find the internal media details 
+    (including mediaId and tvdbId) using the provided IMDb ID, and then sends a 
+    POST request to the Overseerr API with the required payload.
     
     Args:
-        imdb_id: The IMDb ID of the content.
-        media_type: Either "movie" for movies or "tv" for TV shows (default: "movie").
+        imdb_id (str): The IMDb ID of the media.
+        media_type (str): Either "movie" for movies or "tv" for TV shows (default: "movie").
     
     Returns:
-        JSON response or error details.
+        dict: The JSON response from Overseerr or error details.
     """
-    overseerr_url = os.environ.get("OVERSEERR_URL", "http://overseerr:5055")
+    # Base URL and API key for Overseerr
+    overseerr_url = os.environ.get("OVERSEERR_URL", "http://localhost:5055")
+    api_key = os.environ.get("OVERSEERR_API_KEY")
     
-    # Ensure the media type is either "movie" or "tv"
-    media_type = media_type.lower()
-    if media_type not in ("movie", "tv"):
-        media_type = "movie"
-    
-    # Set the endpoint and payload according to the media type
-    primary_endpoint = f"{overseerr_url}/api/v1/request/{media_type}"
-    primary_payload = {"imdbId": imdb_id} if media_type == "movie" else {"tvdbId": imdb_id}
-    
-    # Fallback in case the primary request fails
-    fallback_type = "tv" if media_type == "movie" else "movie"
-    fallback_endpoint = f"{overseerr_url}/api/v1/request/{fallback_type}"
-    fallback_payload = {"imdbId": imdb_id} if fallback_type == "movie" else {"tvdbId": imdb_id}
-    
-    try:
-        # Primary attempt with the requested media type
-        r = requests.post(primary_endpoint, json=primary_payload)
-        r.raise_for_status()
-        logging.info(f"Successfully sent request as {media_type} for {imdb_id}")
-        return r.json()
-    except Exception as e:
-        logging.warning(f"Failed to send as {media_type}, trying as {fallback_type}: {e}")
-        try:
-            # Attempt with the fallback media type
-            r = requests.post(fallback_endpoint, json=fallback_payload)
-            r.raise_for_status()
-            logging.info(f"Successfully sent request as {fallback_type} for {imdb_id}")
-            return r.json()
-        except Exception as e2:
-            logging.error(f"Error sending requests for {imdb_id} (tried both types): {e2}")
-            return {"error": str(e2)}
+    # Set common headers including the API key if available
+    headers = {
+        "accept": "application/json",
+        "Content-Type": "application/json"
+    }
+    if api_key:
+        headers["X-Api-Key"] = api_key
 
+    # Step 1: Search for the media details using the IMDb ID
+    search_endpoint = f"{overseerr_url}/api/v1/search"
+    params = {"query": imdb_id}
+    try:
+        search_response = requests.get(search_endpoint, params=params, headers=headers)
+        search_response.raise_for_status()
+        results = search_response.json()
+    except Exception as e:
+        logging.error(f"Error searching for media with IMDb id {imdb_id}: {e}")
+        return {"error": str(e)}
+    
+    # Find the media matching the requested type
+    media = None
+    for item in results:
+        # Assuming each result has a "mediaType" field to distinguish movies vs TV shows
+        if item.get("mediaType", "").lower() == media_type.lower():
+            media = item
+            break
+    
+    if not media:
+        logging.error(f"No media found for IMDb id {imdb_id} with mediaType {media_type}")
+        return {"error": "Media not found"}
+    
+    # Extract Overseerr's mediaId and tvdbId (tvdbId is relevant for TV shows)
+    mediaId = media.get("id")
+    tvdbId = media.get("tvdbId", 0)
+    
+    # Step 2: Build the payload for the POST request to request the media
+    payload = {
+        "mediaType": media_type,          # "movie" or "tv"
+        "mediaId": mediaId,               # Overseerr's internal media ID
+        "tvdbId": tvdbId,                 # TVDB ID (for TV shows; for movies this might be 0)
+        "seasons": [1] if media_type.lower() == "tv" else [],  # Example season array for TV shows
+        "is4k": False,                    # 4K flag
+        "serverId": 0,                    # Default server id
+        "profileId": 0,                   # Default profile id
+        "rootFolder": "string",           # Root folder (placeholder)
+        "languageProfileId": 0,           # Language profile id
+        "userId": 0                       # User id making the request
+    }
+    
+    # Step 3: Send the request to Overseerr
+    request_endpoint = f"{overseerr_url}/api/v1/request"
+    try:
+        request_response = requests.post(request_endpoint, json=payload, headers=headers)
+        request_response.raise_for_status()
+        logging.info(f"Successfully sent request for media {imdb_id} (Overseerr mediaId: {mediaId})")
+        return request_response.json()
+    except Exception as e:
+        logging.error(f"Error sending request for media {imdb_id}: {e}")
+        return {"error": str(e)}
 
 @app.route('/api/users', methods=['GET'])
 def get_users():
