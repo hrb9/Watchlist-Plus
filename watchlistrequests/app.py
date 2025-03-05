@@ -9,6 +9,8 @@ import time
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from plexapi.myplex import MyPlexAccount
+from urllib.parse import quote
+
 
 app = Flask(__name__)
 
@@ -513,9 +515,6 @@ def set_auto_approval():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-import os
-import requests
-import logging
 
 
 def get_media_details_from_imdb(imdb_id, media_type="movie"):
@@ -573,7 +572,7 @@ def request_media_from_overseer(imdb_id, media_type="movie"):
     
     Steps:
       1. Convert the IMDb ID to media details (title and tvdbId).
-      2. Search Overseerr using the media title.
+      2. Search Overseerr using the media title (with URL encoding to replace spaces with %20).
       3. Iterate through search results to find a match:
          - For TV shows, compare the tvdbId.
          - For movies, compare the title.
@@ -611,9 +610,10 @@ def request_media_from_overseer(imdb_id, media_type="movie"):
     title = details["title"]
     expected_tvdb_id = details["tvdbId"]
     
-    # Step 2: Search Overseerr by media title.
+    # Step 2: Search Overseerr by media title with URL encoding (spaces become %20).
     search_endpoint = f"{overseerr_url}/api/v1/search"
-    params = {"query": title}
+    encoded_title = quote(title)  # Encode spaces and other special characters
+    params = {"query": encoded_title}
     try:
         search_response = requests.get(search_endpoint, params=params, headers=headers)
         search_response.raise_for_status()
@@ -667,7 +667,6 @@ def request_media_from_overseer(imdb_id, media_type="movie"):
     except Exception as e:
         logging.error(f"Error sending request for media '{title}': {e}")
         return {"error": str(e)}
-
 
 @app.route('/api/users', methods=['GET'])
 def get_users():
