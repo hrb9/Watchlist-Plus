@@ -589,13 +589,17 @@ def request_media_from_overseer(imdb_id, media_type="movie"):
     overseerr_url = os.environ.get("OVERSEERR_URL", "http://localhost:5055")
     overseerr_api_key = os.environ.get("OVERSEERR_API_KEY")
     
-    # Setup headers with the API key if available.
+    if not overseerr_api_key:
+        error_msg = "OVERSEERR_API_KEY not set in environment variables."
+        logging.error(error_msg)
+        return {"error": error_msg}
+    
+    # Setup headers with the API key.
     headers = {
         "accept": "application/json",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
+        "X-Api-Key": overseerr_api_key
     }
-    if overseerr_api_key:
-        headers["X-Api-Key"] = overseerr_api_key
 
     # Step 1: Convert IMDb ID to media details.
     try:
@@ -613,7 +617,7 @@ def request_media_from_overseer(imdb_id, media_type="movie"):
     try:
         search_response = requests.get(search_endpoint, params=params, headers=headers)
         search_response.raise_for_status()
-        search_results = search_response.json()
+        search_results = search_response.json().get("results", [])
     except Exception as e:
         logging.error(f"Error searching Overseerr for title '{title}': {e}")
         return {"error": str(e)}
@@ -663,6 +667,7 @@ def request_media_from_overseer(imdb_id, media_type="movie"):
     except Exception as e:
         logging.error(f"Error sending request for media '{title}': {e}")
         return {"error": str(e)}
+
 
 @app.route('/api/users', methods=['GET'])
 def get_users():
