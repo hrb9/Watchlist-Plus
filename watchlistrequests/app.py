@@ -517,83 +517,151 @@ import os
 import requests
 import logging
 
-def request_media_from_overseer(imdb_id, media_type="movie"):
+
+def get_media_details_from_imdb(imdb_id, media_type="movie"):
     """
-    Sends a request to Overseerr for a media item using its IMDb ID.
+    Converts an IMDb ID to media details (title and tvdbId) using the TMDb API.
     
-    This function first searches Overseerr to find the internal media details 
-    (including mediaId and tvdbId) using the provided IMDb ID, and then sends a 
-    POST request to the Overseerr API with the required payload.
+    This function calls TMDb's "find" endpoint to get details by the provided IMDb ID.
     
     Args:
         imdb_id (str): The IMDb ID of the media.
-        media_type (str): Either "movie" for movies or "tv" for TV shows (default: "movie").
+        media_type (str): "movie" for movies or "tv" for TV shows.
+        
+    Returns:
+        dict: A dictionary containing 'title' and 'tvdbId'.
+        
+    Raises:
+        Exception: If no results are found or if TMDb API fails.
+    """
+    tmdb_api_key = os.environ.get("TMDB_API_KEY")
+    if not tmdb_api_key:
+        raise Exception("TMDB_API_KEY not set in environment variables.")
+        
+    # TMDb find endpoint for external IDs
+    url = f"https://api.themoviedb.org/3/find/{imdb_id}"
+    params = {
+        "api_key": tmdb_api_key,
+        "external_source": "imdb_id"
+    }
     
+    response = requests.get(url, params=params)
+    response.raise_for_status()
+    data = response.json()
+    
+    # For movies, the results are in 'movie_results'; for TV shows in 'tv_results'
+    if media_type == "movie":
+        results = data.get("movie_results", [])
+    else:
+        results = data.get("tv_results", [])
+    
+    if not results:
+        raise Exception(f"No results found for IMDb ID: {imdb_id}")
+    
+    result = results[0]
+    # For movies, the title field is 'title'; for TV shows it's 'name'
+    title = result.get("title") if media_type == "movie" else result.get("name")
+    # tvdb_id is provided in TV results; for movies, set it to 0
+    tvdb_id = result.get("tvdb_id", 0) if media_type == "tv" else 0
+    
+    return {"title": title, "tvdbId": tvdb_id}
+
+def request_media_from_overseer(imdb_id, media_type="movie"):
+    """
+    Converts an IMDb ID to media details using TMDb API, searches Overseerr by title,
+    compares the tvdbId (if media_type is "tv") and sends a request to Overseerr.
+    
+    Steps:
+      1. Convert the IMDb ID to media details (title and tvdbId).
+      2. Search Overseerr using the media title.
+      3. Iterate through search results to find a match:
+         - For TV shows, compare the tvdbId.
+         - For movies, compare the title.
+      4. Build the payload and send a POST request to Overseerr.
+    
+    Args:
+        imdb_id (str): The IMDb ID of the media.
+        media_type (str): "movie" for movies or "tv" for TV shows (default: "movie").
+        
     Returns:
         dict: The JSON response from Overseerr or error details.
     """
-    # Base URL and API key for Overseerr
     overseerr_url = os.environ.get("OVERSEERR_URL", "http://localhost:5055")
-    api_key = os.environ.get("OVERSEERR_API_KEY")
+    overseerr_api_key = os.environ.get("OVERSEERR_API_KEY")
     
-    # Set common headers including the API key if available
+    # Setup headers with the API key if available.
     headers = {
         "accept": "application/json",
         "Content-Type": "application/json"
     }
-    if api_key:
-        headers["X-Api-Key"] = api_key
+    if overseerr_api_key:
+        headers["X-Api-Key"] = overseerr_api_key
 
-    # Step 1: Search for the media details using the IMDb ID
+    # Step 1: Convert IMDb ID to media details.
+    try:
+        details = get_media_details_from_imdb(imdb_id, media_type)
+    except Exception as e:
+        logging.error(f"Error converting IMDb ID {imdb_id}: {e}")
+        return {"error": str(e)}
+    
+    title = details["title"]
+    expected_tvdb_id = details["tvdbId"]
+    
+    # Step 2: Search Overseerr by media title.
     search_endpoint = f"{overseerr_url}/api/v1/search"
-    params = {"query": imdb_id}
+    params = {"query": title}
     try:
         search_response = requests.get(search_endpoint, params=params, headers=headers)
         search_response.raise_for_status()
-        results = search_response.json()
+        search_results = search_response.json()
     except Exception as e:
-        logging.error(f"Error searching for media with IMDb id {imdb_id}: {e}")
+        logging.error(f"Error searching Overseerr for title '{title}': {e}")
         return {"error": str(e)}
     
-    # Find the media matching the requested type
-    media = None
-    for item in results:
-        # Assuming each result has a "mediaType" field to distinguish movies vs TV shows
-        if item.get("mediaType", "").lower() == media_type.lower():
-            media = item
-            break
+    # Step 3: Find the matching media in Overseerr.
+    matched_media = None
+    for item in search_results:
+        if media_type == "tv":
+            # Compare tvdbId for TV shows.
+            if item.get("tvdbId") == expected_tvdb_id:
+                matched_media = item
+                break
+        else:
+            # For movies, compare titles (case-insensitive).
+            if item.get("title", "").lower() == title.lower():
+                matched_media = item
+                break
     
-    if not media:
-        logging.error(f"No media found for IMDb id {imdb_id} with mediaType {media_type}")
-        return {"error": "Media not found"}
+    if not matched_media:
+        error_msg = f"No matching media found in Overseerr for title '{title}' and tvdbId {expected_tvdb_id}"
+        logging.error(error_msg)
+        return {"error": error_msg}
     
-    # Extract Overseerr's mediaId and tvdbId (tvdbId is relevant for TV shows)
-    mediaId = media.get("id")
-    tvdbId = media.get("tvdbId", 0)
+    mediaId = matched_media.get("id")
+    tvdbId = matched_media.get("tvdbId", 0)
     
-    # Step 2: Build the payload for the POST request to request the media
+    # Step 4: Build payload and send the request to Overseerr.
     payload = {
         "mediaType": media_type,          # "movie" or "tv"
         "mediaId": mediaId,               # Overseerr's internal media ID
-        "tvdbId": tvdbId,                 # TVDB ID (for TV shows; for movies this might be 0)
-        "seasons": [1] if media_type.lower() == "tv" else [],  # Example season array for TV shows
-        "is4k": False,                    # 4K flag
-        "serverId": 0,                    # Default server id
-        "profileId": 0,                   # Default profile id
-        "rootFolder": "string",           # Root folder (placeholder)
-        "languageProfileId": 0,           # Language profile id
-        "userId": 0                       # User id making the request
+        "tvdbId": tvdbId,                 # TVDB ID (0 for movies)
+        "seasons": [1] if media_type.lower() == "tv" else [],
+        "is4k": False,
+        "serverId": 0,
+        "profileId": 0,
+        "rootFolder": "string",
+        "languageProfileId": 0,
+        "userId": 0
     }
     
-    # Step 3: Send the request to Overseerr
     request_endpoint = f"{overseerr_url}/api/v1/request"
     try:
         request_response = requests.post(request_endpoint, json=payload, headers=headers)
         request_response.raise_for_status()
-        logging.info(f"Successfully sent request for media {imdb_id} (Overseerr mediaId: {mediaId})")
+        logging.info(f"Successfully sent request for media '{title}' (Overseerr mediaId: {mediaId})")
         return request_response.json()
     except Exception as e:
-        logging.error(f"Error sending request for media {imdb_id}: {e}")
+        logging.error(f"Error sending request for media '{title}': {e}")
         return {"error": str(e)}
 
 @app.route('/api/users', methods=['GET'])
