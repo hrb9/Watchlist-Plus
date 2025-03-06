@@ -3,6 +3,7 @@ import logging
 import requests
 from tmdb_services import get_imdb_id as tmdb_get_imdb_id
 from imdbmovies import IMDB
+import os   
 
 app = Flask(__name__)
 imdb = IMDB()
