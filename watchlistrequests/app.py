@@ -636,8 +636,13 @@ def request_media_from_overseer(imdb_id, media_type="movie"):
                 matched_media = item
                 break
     
+    # If no exact match found, use the first search result if available
+    if not matched_media and search_results:
+        matched_media = search_results[0]
+        logging.warning(f"No exact match found for '{title}' (tvdbId: {expected_tvdb_id}). Using first result: '{matched_media.get('title')}' (tvdbId: {matched_media.get('tvdbId', 0)})")
+    
     if not matched_media:
-        error_msg = f"No matching media found in Overseerr for title '{title}' and tvdbId {expected_tvdb_id}"
+        error_msg = f"No search results found in Overseerr for title '{title}'"
         logging.error(error_msg)
         return {"error": error_msg}
     

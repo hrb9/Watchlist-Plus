@@ -18,7 +18,7 @@ def get_imdb_from_title(title, media_type):
     try:
         result = imdb.get_by_name(title, tv=(media_type in ['show', 'episode']))
         if result and 'url' in result:
-            return result['url'].split("https://www.imdb.comhttps://www.imdb.com/title/")[1].split("/")[0]
+            return result['url'].split("https://www.imdb.com/title/")[1].split("/")[0]
     except Exception as e:
         logging.error(f"Error in IMDB lookup for {title}: {e}")
     return None
