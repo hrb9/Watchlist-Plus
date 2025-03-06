@@ -56,6 +56,134 @@ def get_imdb_id():
     
     return jsonify({"imdb_id": synthetic_id})
 
+@app.route('/convert_ids', methods=['POST'])
+def convert_ids():
+    """
+    Convert between different media IDs (IMDb, TMDb, TVDb) and get title and Overseerr media ID.
+    
+    Request format:
+    {
+        "imdb_id": "tt12345678",  // Optional: one of the IDs must be provided
+        "tmdb_id": 12345,         // Optional
+        "tvdb_id": 12345,         // Optional
+        "media_type": "movie"     // Required: "movie" or "tv"
+    }
+    
+    Response format:
+    {
+        "imdb_id": "tt12345678",
+        "tmdb_id": 12345,
+        "tvdb_id": 12345,
+        "title": "Movie Title",
+        "overseerr_id": 12345,
+        "media_type": "movie"
+    }
+    """
+    from tmdb_services import get_tmdb_id, get_imdb_id, get_tvdb_id, get_movie_details, get_tv_details
+    
+    data = request.json
+    imdb_id = data.get('imdb_id')
+    tmdb_id = data.get('tmdb_id')
+    tvdb_id = data.get('tvdb_id')
+    media_type = data.get('media_type', 'movie')
+    
+    result = {
+        'imdb_id': imdb_id,
+        'tmdb_id': tmdb_id,
+        'tvdb_id': tvdb_id,
+        'title': None,
+        'overseerr_id': None,
+        'media_type': media_type
+    }
+    
+    # Step 1: Get TMDb ID if we don't have it yet
+    if not tmdb_id and imdb_id:
+        tmdb_id = get_tmdb_id(imdb_id)
+        result['tmdb_id'] = tmdb_id
+    
+    # Step 2: Get details based on TMDb ID
+    if tmdb_id:
+        if media_type == 'movie':
+            details = get_movie_details(tmdb_id)
+            if details:
+                result['title'] = details.get('title')
+        else:
+            details = get_tv_details(tmdb_id)
+            if details:
+                result['title'] = details.get('name')
+                
+        # Step 3: Get IMDb ID if we don't have it yet
+        if not imdb_id:
+            imdb_id = get_imdb_id(tmdb_id, media_type)
+            result['imdb_id'] = imdb_id
+            
+        # Step 4: Get TVDb ID if we don't have it yet
+        if not tvdb_id and media_type == 'tv':
+            tvdb_id = get_tvdb_id(tmdb_id)
+            result['tvdb_id'] = tvdb_id
+    
+    # Step 5: Look up Overseerr ID if we have a title
+    if result['title']:
+        overseerr_id = get_overseerr_id(result['title'], media_type, result['tvdb_id'])
+        result['overseerr_id'] = overseerr_id
+    
+    return jsonify(result)
+
+def get_overseerr_id(title, media_type, tvdb_id=None):
+    """
+    Search Overseerr by title and get media ID.
+    Similar to what request_media_from_overseer does in watchlistrequests.
+    """
+    from urllib.parse import quote
+    
+    overseerr_url = os.environ.get("OVERSEERR_URL", "http://localhost:5055")
+    overseerr_api_key = os.environ.get("OVERSEERR_API_KEY")
+    
+    if not overseerr_api_key or not title:
+        return None
+    
+    # Setup headers with the API key
+    headers = {
+        "accept": "application/json",
+        "X-Api-Key": overseerr_api_key
+    }
+
+    # Search Overseerr by media title with URL encoding
+    search_endpoint = f"{overseerr_url}/api/v1/search"
+    encoded_title = quote(title)
+    params = {"query": encoded_title}
+    
+    try:
+        search_response = requests.get(search_endpoint, params=params, headers=headers)
+        search_response.raise_for_status()
+        search_results = search_response.json().get("results", [])
+        
+        # Find the matching media in Overseerr
+        matched_media = None
+        for item in search_results:
+            if media_type == "tv" and tvdb_id:
+                # Compare tvdbId for TV shows
+                if item.get("tvdbId") == tvdb_id:
+                    matched_media = item
+                    break
+            else:
+                # For movies or if no tvdb_id, compare titles (case-insensitive)
+                if item.get("title", "").lower() == title.lower():
+                    matched_media = item
+                    break
+        
+        # If no exact match found, use the first result if available
+        if not matched_media and search_results:
+            matched_media = search_results[0]
+        
+        if matched_media:
+            return matched_media.get("id")
+            
+    except Exception as e:
+        logging.error(f"Error searching Overseerr for title '{title}': {e}")
+        
+    return None
+
 if __name__ == '__main__':
     # Host=0.0.0.0 so that it is accessible from other containers (not just localhost).
     app.run(host='0.0.0.0', port=5331, debug=True)

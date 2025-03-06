@@ -570,13 +570,7 @@ def request_media_from_overseer(imdb_id, media_type="movie"):
     Converts an IMDb ID to media details using TMDb API, searches Overseerr by title,
     compares the tvdbId (if media_type is "tv") and sends a request to Overseerr.
     
-    Steps:
-      1. Convert the IMDb ID to media details (title and tvdbId).
-      2. Search Overseerr using the media title (with URL encoding to replace spaces with %20).
-      3. Iterate through search results to find a match:
-         - For TV shows, compare the tvdbId.
-         - For movies, compare the title.
-      4. Build the payload and send a POST request to Overseerr.
+    Uses the new getimdbid service endpoint for ID conversion and Overseerr searching.
     
     Args:
         imdb_id (str): The IMDb ID of the media.
@@ -587,91 +581,61 @@ def request_media_from_overseer(imdb_id, media_type="movie"):
     """
     overseerr_url = os.environ.get("OVERSEERR_URL", "http://localhost:5055")
     overseerr_api_key = os.environ.get("OVERSEERR_API_KEY")
+    getimdbid_url = os.environ.get("GETIMDBID_URL", "http://getimdbid:5331")
     
     if not overseerr_api_key:
         error_msg = "OVERSEERR_API_KEY not set in environment variables."
         logging.error(error_msg)
         return {"error": error_msg}
     
-    # Setup headers with the API key.
+    # Setup headers with the API key
     headers = {
         "accept": "application/json",
         "Content-Type": "application/json",
         "X-Api-Key": overseerr_api_key
     }
 
-    # Step 1: Convert IMDb ID to media details.
+    # Step 1: Convert IMDb ID to all media details using the new endpoint
     try:
-        details = get_media_details_from_imdb(imdb_id, media_type)
-    except Exception as e:
-        logging.error(f"Error converting IMDb ID {imdb_id}: {e}")
-        return {"error": str(e)}
-    
-    title = details["title"]
-    expected_tvdb_id = details["tvdbId"]
-    
-    # Step 2: Search Overseerr by media title with URL encoding (spaces become %20).
-    search_endpoint = f"{overseerr_url}/api/v1/search"
-    encoded_title = quote(title)  # Encode spaces and other special characters
-    params = {"query": encoded_title}
-    try:
-        search_response = requests.get(search_endpoint, params=params, headers=headers)
-        search_response.raise_for_status()
-        search_results = search_response.json().get("results", [])
-    except Exception as e:
-        logging.error(f"Error searching Overseerr for title '{title}': {e}")
-        return {"error": str(e)}
-    
-    # Step 3: Find the matching media in Overseerr.
-    matched_media = None
-    for item in search_results:
-        if media_type == "tv":
-            # Compare tvdbId for TV shows.
-            if item.get("tvdbId") == expected_tvdb_id:
-                matched_media = item
-                break
-        else:
-            # For movies, compare titles (case-insensitive).
-            if item.get("title", "").lower() == title.lower():
-                matched_media = item
-                break
-    
-    # If no exact match found, use the first search result if available
-    if not matched_media and search_results:
-        matched_media = search_results[0]
-        logging.warning(f"No exact match found for '{title}' (tvdbId: {expected_tvdb_id}). Using first result: '{matched_media.get('title')}' (tvdbId: {matched_media.get('tvdbId', 0)})")
-    
-    if not matched_media:
-        error_msg = f"No search results found in Overseerr for title '{title}'"
-        logging.error(error_msg)
-        return {"error": error_msg}
-    
-    mediaId = matched_media.get("id")
-    tvdbId = matched_media.get("tvdbId", 0)
-    
-    # Step 4: Build payload and send the request to Overseerr.
-    payload = {
-        "mediaType": media_type,          # "movie" or "tv"
-        "mediaId": mediaId,               # Overseerr's internal media ID
-        "tvdbId": tvdbId,                 # TVDB ID (0 for movies)
-        "seasons": [1] if media_type.lower() == "tv" else [],
-        "is4k": False,
-        "serverId": 0,
-        "profileId": 0,
-        "rootFolder": "string",
-        "languageProfileId": 0,
-        "userId": 0
-    }
-    
-    request_endpoint = f"{overseerr_url}/api/v1/request"
-    try:
+        r = requests.post(f"{getimdbid_url}/convert_ids", 
+                        json={"imdb_id": imdb_id, "media_type": media_type})
+        r.raise_for_status()
+        media_details = r.json()
+        
+        title = media_details.get("title")
+        tvdbId = media_details.get("tvdb_id", 0)
+        overseerr_id = media_details.get("overseerr_id")
+        
+        if not title or not overseerr_id:
+            error_msg = f"Could not find title or Overseerr ID for IMDb ID: {imdb_id}"
+            logging.error(error_msg)
+            return {"error": error_msg}
+        
+        # Build payload for Overseerr request
+        payload = {
+            "mediaType": media_type,          # "movie" or "tv"
+            "mediaId": overseerr_id,          # Overseerr's internal media ID
+            "tvdbId": tvdbId,                 # TVDB ID (0 for movies)
+            "seasons": [1] if media_type.lower() == "tv" else [],
+            "is4k": False,
+            "serverId": 0,
+            "profileId": 0,
+            "rootFolder": "string",
+            "languageProfileId": 0,
+            "userId": 0
+        }
+        
+        # Send request to Overseerr
+        request_endpoint = f"{overseerr_url}/api/v1/request"
         request_response = requests.post(request_endpoint, json=payload, headers=headers)
         request_response.raise_for_status()
-        logging.info(f"Successfully sent request for media '{title}' (Overseerr mediaId: {mediaId})")
+        logging.info(f"Successfully sent request for media '{title}' (Overseerr mediaId: {overseerr_id})")
         return request_response.json()
+        
     except Exception as e:
-        logging.error(f"Error sending request for media '{title}': {e}")
-        return {"error": str(e)}
+        error_msg = f"Error processing request for IMDb ID {imdb_id}: {e}"
+        logging.error(error_msg)
+        return {"error": error_msg}
 
 @app.route('/api/users', methods=['GET'])
 def get_users():
