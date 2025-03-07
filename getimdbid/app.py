@@ -80,55 +80,93 @@ def convert_ids():
         "media_type": "movie"
     }
     """
-    from tmdb_services import get_tmdb_id, get_imdb_id, get_tvdb_id, get_movie_details, get_tv_details
-    
-    data = request.json
-    imdb_id = data.get('imdb_id')
-    tmdb_id = data.get('tmdb_id')
-    tvdb_id = data.get('tvdb_id')
-    media_type = data.get('media_type', 'movie')
-    
-    result = {
-        'imdb_id': imdb_id,
-        'tmdb_id': tmdb_id,
-        'tvdb_id': tvdb_id,
-        'title': None,
-        'overseerr_id': None,
-        'media_type': media_type
-    }
-    
-    # Step 1: Get TMDb ID if we don't have it yet
-    if not tmdb_id and imdb_id:
-        tmdb_id = get_tmdb_id(imdb_id)
-        result['tmdb_id'] = tmdb_id
-    
-    # Step 2: Get details based on TMDb ID
-    if tmdb_id:
-        if media_type == 'movie':
-            details = get_movie_details(tmdb_id)
-            if details:
-                result['title'] = details.get('title')
-        else:
-            details = get_tv_details(tmdb_id)
-            if details:
-                result['title'] = details.get('name')
+    try:
+        # Import what we need from tmdb_services with fallbacks
+        import tmdb_services
+        
+        # Check what functions are available in tmdb_services and log
+        available_functions = [f for f in dir(tmdb_services) if callable(getattr(tmdb_services, f)) and not f.startswith('_')]
+        logging.info(f"Available functions in tmdb_services: {available_functions}")
+        
+        # Get the functions we need with safe fallbacks
+        get_tmdb_id = getattr(tmdb_services, 'get_tmdb_id', lambda x: None)
+        get_imdb_id = getattr(tmdb_services, 'get_imdb_id', lambda x, y: None)
+        get_tvdb_id = getattr(tmdb_services, 'get_tvdb_id', lambda x: None)
+        get_movie_details = getattr(tmdb_services, 'get_movie_details', lambda x: {'title': None})
+        get_tv_details = getattr(tmdb_services, 'get_tv_details', lambda x: {'name': None})
+        
+        data = request.json
+        logging.info(f"Request data: {data}")
+        imdb_id = data.get('imdb_id')
+        tmdb_id = data.get('tmdb_id')
+        tvdb_id = data.get('tvdb_id')
+        media_type = data.get('media_type', 'movie')
+        
+        result = {
+            'imdb_id': imdb_id,
+            'tmdb_id': tmdb_id,
+            'tvdb_id': tvdb_id,
+            'title': None,
+            'overseerr_id': None,
+            'media_type': media_type
+        }
+        
+        # Step 1: Get TMDb ID if we don't have it yet
+        if not tmdb_id and imdb_id:
+            try:
+                tmdb_id = get_tmdb_id(imdb_id)
+                result['tmdb_id'] = tmdb_id
+                logging.info(f"Converted imdb_id {imdb_id} to tmdb_id {tmdb_id}")
+            except Exception as e:
+                logging.error(f"Error getting tmdb_id from imdb_id {imdb_id}: {e}")
+        
+        # Step 2: Get details based on TMDb ID
+        if tmdb_id:
+            try:
+                if media_type == 'movie':
+                    details = get_movie_details(tmdb_id)
+                    if details:
+                        result['title'] = details.get('title')
+                else:
+                    details = get_tv_details(tmdb_id)
+                    if details:
+                        result['title'] = details.get('name')
+                logging.info(f"Got title '{result['title']}' for tmdb_id {tmdb_id}")
+            except Exception as e:
+                logging.error(f"Error getting details for tmdb_id {tmdb_id}: {e}")
+                    
+            # Step 3: Get IMDb ID if we don't have it yet
+            if not imdb_id:
+                try:
+                    imdb_id = get_imdb_id(tmdb_id, media_type)
+                    result['imdb_id'] = imdb_id
+                    logging.info(f"Converted tmdb_id {tmdb_id} to imdb_id {imdb_id}")
+                except Exception as e:
+                    logging.error(f"Error getting imdb_id from tmdb_id {tmdb_id}: {e}")
                 
-        # Step 3: Get IMDb ID if we don't have it yet
-        if not imdb_id:
-            imdb_id = get_imdb_id(tmdb_id, media_type)
-            result['imdb_id'] = imdb_id
-            
-        # Step 4: Get TVDb ID if we don't have it yet
-        if not tvdb_id and media_type == 'tv':
-            tvdb_id = get_tvdb_id(tmdb_id)
-            result['tvdb_id'] = tvdb_id
-    
-    # Step 5: Look up Overseerr ID if we have a title
-    if result['title']:
-        overseerr_id = get_overseerr_id(result['title'], media_type, result['tvdb_id'])
-        result['overseerr_id'] = overseerr_id
-    
-    return jsonify(result)
+            # Step 4: Get TVDb ID if we don't have it yet
+            if not tvdb_id and media_type == 'tv':
+                try:
+                    tvdb_id = get_tvdb_id(tmdb_id)
+                    result['tvdb_id'] = tvdb_id
+                    logging.info(f"Converted tmdb_id {tmdb_id} to tvdb_id {tvdb_id}")
+                except Exception as e:
+                    logging.error(f"Error getting tvdb_id from tmdb_id {tmdb_id}: {e}")
+        
+        # Step 5: Look up Overseerr ID if we have a title
+        if result['title']:
+            try:
+                overseerr_id = get_overseerr_id(result['title'], media_type, result['tvdb_id'])
+                result['overseerr_id'] = overseerr_id
+                logging.info(f"Got overseerr_id {overseerr_id} for title '{result['title']}'")
+            except Exception as e:
+                logging.error(f"Error getting overseerr_id for title '{result['title']}': {e}")
+        
+        logging.info(f"Final result: {result}")
+        return jsonify(result)
+    except Exception as e:
+        logging.error(f"Unhandled exception in convert_ids: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
 
 def get_overseerr_id(title, media_type, tvdb_id=None):
     """
