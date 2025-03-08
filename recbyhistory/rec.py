@@ -9,6 +9,9 @@ from google import genai
 from google.genai.types import Tool, GenerateContentConfig, GoogleSearch
 from db import Database
 from config import ITEMS_PER_GROUP, OVERSEERR_URL, OVERSEERR_API_TOKEN
+import logging
+import datetime
+from pathlib import Path
 
 # Control variables
 NUM_MOVIES = 3
@@ -29,6 +32,32 @@ def init_gemini_client():
 
 # Initialize tools
 google_search_tool = Tool(google_search=GoogleSearch())
+
+def setup_debug_logging():
+    """Set up dedicated logging for debugging IMDB ID issues"""
+    # Create logs directory if it doesn't exist
+    logs_dir = Path("logs")
+    logs_dir.mkdir(exist_ok=True)
+    
+    # Create a unique log file based on timestamp
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_file = logs_dir / f"imdb_debug_{timestamp}.log"
+    
+    # Configure the logger
+    logging.basicConfig(
+        filename=str(log_file),
+        level=logging.DEBUG,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+    
+    # Also print to console
+    console = logging.StreamHandler()
+    console.setLevel(logging.INFO)
+    logging.getLogger('').addHandler(console)
+    
+    logging.info(f"Debug logging initialized, writing to {log_file}")
+    return log_file
 
 def format_history_for_ai(group):
     prompt = ""
@@ -71,8 +100,10 @@ def get_user_taste(all_groups_history):
         return "Error generating user taste profile."
 
 def get_ai_recommendations(all_groups_history, user_taste):
+    logging.info("Starting AI recommendation generation")
     client = init_gemini_client()
     if not client:
+        logging.error("Failed to initialize Gemini client")
         return "[]"
     
     # Format very explicitly to ensure valid JSON output
@@ -108,9 +139,10 @@ def get_ai_recommendations(all_groups_history, user_taste):
             model="gemini-2.0-flash-exp",
             config=config,
         )
+        logging.info("Successfully received AI response")
         return response.text
     except Exception as e:
-        print(f"Error generating recommendations: {e}")
+        logging.error(f"Error generating recommendations: {e}")
         return "[]" # Return empty JSON array on error
 
 def get_tmdb_poster(imdb_id):
@@ -137,26 +169,35 @@ def get_tmdb_poster(imdb_id):
     return None
 
 def update_recommendations_with_images(recommendations):
+    logging.info(f"Updating {len(recommendations)} recommendations with images")
     updated = []
-    for rec in recommendations:
+    for i, rec in enumerate(recommendations):
         imdb_id = rec.get("imdb_id")
+        title = rec.get("title", "UNKNOWN")
+        logging.info(f"Finding image for recommendation #{i+1}: '{title}', IMDB_ID='{imdb_id}'")
+        
         tmdb_url = get_tmdb_poster(imdb_id)
         if tmdb_url:
             rec["image_url"] = tmdb_url
+            logging.info(f"Found image URL: {tmdb_url}")
+        else:
+            logging.warning(f"No image found for IMDB ID: {imdb_id}")
         updated.append(rec)
     return updated
 
 def clean_json_output(text):
-    """Super robust JSON cleaner with multiple fallback strategies"""
+    logging.info(f"Starting JSON cleaning, raw text length: {len(text)}")
+    
     if not text or text.isspace():
-        print("Warning: Empty response from AI")
+        logging.warning("Empty response from AI")
         return "[]"
     
-    print(f"Raw AI output: {text[:100]}...")  # Print first 100 chars for debugging
+    logging.debug(f"Raw AI output: {text[:500]}...")
     
     # Strategy 1: Basic Markdown cleaning
     cleaned = re.sub(r"```(json)?", "", text, flags=re.MULTILINE)
     cleaned = cleaned.strip()
+    logging.debug(f"After basic cleaning: {cleaned[:100]}...")
     
     # Strategy 2: Find JSON array within text
     if not (cleaned.startswith('[') and cleaned.endswith(']')):
@@ -177,17 +218,33 @@ def clean_json_output(text):
     
     # Strategy 5: Create a minimal valid array if all else fails
     if not cleaned or not cleaned.strip() or not (cleaned.startswith('[') and cleaned.endswith(']')):
-        print("Warning: Could not extract valid JSON, returning empty array")
+        logging.warning("Could not extract valid JSON, returning empty array")
         return "[]"
     
+    logging.info(f"Final cleaned JSON length: {len(cleaned)}")
     return cleaned
 
 def filter_new_recommendations(recommendations, watch_history):
     watched_imdbs = {item[2] for item in watch_history}
-    return [rec for rec in recommendations if rec.get("imdb_id") not in watched_imdbs]
+    logging.info(f"Filtering against {len(watched_imdbs)} watched IMDB IDs")
+    logging.debug(f"Watched IMDB IDs: {list(watched_imdbs)[:10]}...")
+    
+    filtered = [rec for rec in recommendations if rec.get("imdb_id") not in watched_imdbs]
+    logging.info(f"After filtering: {len(filtered)}/{len(recommendations)} recommendations remaining")
+    
+    for i, rec in enumerate(filtered):
+        imdb_id = rec.get("imdb_id", "MISSING")
+        title = rec.get("title", "UNKNOWN")
+        logging.info(f"Filtered recommendation #{i+1}: Title='{title}', IMDB_ID='{imdb_id}'")
+    
+    return filtered
 
 def print_history_groups(db):
+    log_file = setup_debug_logging()
+    logging.info(f"Starting recommendation process for user {db.user_id}, debug log: {log_file}")
+    
     raw_items = db.get_all_items()
+    logging.info(f"Retrieved {len(raw_items)} raw history items")
     
     # Break early if no items
     if not raw_items:
@@ -244,15 +301,25 @@ def print_history_groups(db):
     # Try multiple parsing strategies with detailed error logging
     recommendations = []
     try:
-        print(f"Attempting to parse JSON: {cleaned_text[:100]}...")
+        logging.info(f"Attempting to parse JSON: {cleaned_text[:100]}...")
         recommendations = json.loads(cleaned_text)
-        print(f"Successfully parsed JSON with {len(recommendations)} items")
+        logging.info(f"Successfully parsed JSON with {len(recommendations)} items")
+        
+        # Log IMDB IDs from recommendations
+        for i, rec in enumerate(recommendations):
+            imdb_id = rec.get("imdb_id", "MISSING")
+            title = rec.get("title", "UNKNOWN")
+            logging.info(f"Recommendation #{i+1}: Title='{title}', IMDB_ID='{imdb_id}'")
+            
+            # Validate IMDB ID format
+            if not imdb_id or not isinstance(imdb_id, str) or not imdb_id.startswith("tt"):
+                logging.error(f"Invalid IMDB ID format: '{imdb_id}' for title '{title}'")
     except json.JSONDecodeError as je:
-        print(f"Error parsing JSON: {je}")
-        print(f"Problematic JSON: {cleaned_text}")
+        logging.error(f"Error parsing JSON: {je}")
+        logging.error(f"Problematic JSON: {cleaned_text}")
         
         # Create emergency fallback recommendations
-        print("Creating fallback recommendations...")
+        logging.info("Creating fallback recommendations...")
         recommendations = [
             {"title": "The Shawshank Redemption", "imdb_id": "tt0111161", "image_url": ""},
             {"title": "The Godfather", "imdb_id": "tt0068646", "image_url": ""},
@@ -288,10 +355,12 @@ def print_history_groups(db):
     # Save recommendations to DB
     try:
         json_data = json.dumps(new_recommendations, ensure_ascii=False)
+        logging.info(f"Saving {len(new_recommendations)} recommendations to database")
+        logging.debug(f"JSON to save: {json_data[:1000]}...")
         db.add_recommendation("all", "AI Recommendations", "mixed", json_data)
-        print("Successfully saved recommendations to database")
+        logging.info("Successfully saved recommendations to database")
     except Exception as e:
-        print(f"Error saving recommendations to database: {e}")
+        logging.error(f"Error saving recommendations to database: {e}")
     
     # Push to Overseerr if configured
     if OVERSEERR_URL and OVERSEERR_API_TOKEN:
@@ -302,6 +371,11 @@ def print_history_groups(db):
             print("Failed to push recommendations to Overseerr.")
     
     print("Recommendation process completed.")
+    handlers = logging.getLogger().handlers[:]
+    for handler in handlers:
+        handler.close()
+        logging.getLogger().removeHandler(handler)
+    print(f"Recommendation process completed. See log file for details: {log_file}")
 
 def get_ai_search_results(query: str, system_instruction: str):
     client = init_gemini_client()
