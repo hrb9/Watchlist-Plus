@@ -224,6 +224,7 @@ def discovery():
     num_series = data.get('num_series', 2)
     extra = data.get('extra_elements', '')
 
+    print(f"Discovery request for user {user_id}")
     recbyhistory_url = os.environ.get("RECBYHISTORY_URL", "http://recbyhistory:5335")
     disc_url = f"{recbyhistory_url}/discovery_recommendations"
 
@@ -238,8 +239,13 @@ def discovery():
     try:
         r = requests.post(disc_url, json=payload, timeout=10)
         r.raise_for_status()
-        return jsonify(r.json())
+        response_data = r.json()
+        print(f"Discovery response keys: {list(response_data.keys())}")
+        if 'discovery_recommendations' in response_data:
+            print(f"Found {len(response_data['discovery_recommendations'])} discovery recommendations")
+        return jsonify(response_data)
     except Exception as e:
+        print(f"Error in discovery endpoint: {e}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/monthly_recs', methods=['GET'])

@@ -364,10 +364,9 @@ def get_monthly_recommendations(user_id: str):
 
 @app.post("/discovery_recommendations")
 def post_discovery_recommendations(request: DiscoveryRequest):
-    """
-    מבצע המלצות Discovery בלי עדכון היסטוריה.
-    """
     logging.info(f"Received discovery recommendations request for user {request.user_id}")
+    
+    # Get the recommendations
     final_recs = generate_discovery_recommendations(
         user_id=request.user_id,
         gemini_api_key=request.gemini_api_key,
@@ -376,7 +375,11 @@ def post_discovery_recommendations(request: DiscoveryRequest):
         num_series=request.num_series,
         extra_elements=request.extra_elements
     )
-    logging.info("Discovery recommendations generated.")
+    
+    # Log what we're returning for debugging
+    logging.info(f"Generated {len(final_recs)} discovery recommendations")
+    
+    # Return with the proper field name expected by the frontend
     return {"discovery_recommendations": final_recs}
 
 @app.post("/ai_search")

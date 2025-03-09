@@ -424,6 +424,8 @@ def push_discovery_recommendations(user_id: str, recommendations: list):
         return None
 
 def generate_discovery_recommendations(user_id: str, gemini_api_key: str, tmdb_api_key: str, num_movies: int, num_series: int, extra_elements: str):
+    print(f"Generating discovery recommendations for user {user_id}")
+    
     # Set environment variables for this function call
     os.environ["GEMINI_API_KEY"] = gemini_api_key
     os.environ["TMDB_API_KEY"] = tmdb_api_key
@@ -435,6 +437,8 @@ def generate_discovery_recommendations(user_id: str, gemini_api_key: str, tmdb_a
     for row in items:
         if row[1] and row[2]:  # Make sure we have title and imdb_id
             user_history_text += f"Watch History - Title: {row[1]}, IMDB ID: {row[2]}, User Rating: {row[3]}\n"
+    
+    print(f"Found {len(items)} history items for user")
     
     taste = db.get_latest_user_taste(user_id) or ""
     
@@ -473,10 +477,13 @@ def generate_discovery_recommendations(user_id: str, gemini_api_key: str, tmdb_a
             config=config,
         )
         raw_output = response.text
+        print(f"Received raw AI response of length: {len(raw_output)}")
         cleaned_text = clean_json_output(raw_output)
         recommendations = json.loads(cleaned_text)
+        print(f"Parsed {len(recommendations)} recommendations from AI")
     except json.JSONDecodeError as je:
         print(f"Error parsing JSON: {je}")
+        print(f"Problematic JSON: {cleaned_text[:200]}...")
         recommendations = []
     except Exception as e:
         print(f"Error generating discovery recommendations: {e}")
@@ -485,6 +492,10 @@ def generate_discovery_recommendations(user_id: str, gemini_api_key: str, tmdb_a
     updated_recommendations = update_recommendations_with_images(recommendations)
     watched_imdbs = {row[2] for row in items if row[2]}
     final_recs = [r for r in updated_recommendations if r.get("imdb_id") not in watched_imdbs]
+    
+    print(f"Final recommendations after filtering: {len(final_recs)}")
+    for rec in final_recs:
+        print(f"Recommendation: {rec.get('title')} (IMDB ID: {rec.get('imdb_id')})")
     
     # Save recommendations to database
     try:
