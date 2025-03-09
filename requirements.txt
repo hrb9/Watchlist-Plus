@@ -8,6 +8,7 @@ plexapi
 apscheduler
 flask
 imdbmovies
+nest_asyncio
 
 
 
