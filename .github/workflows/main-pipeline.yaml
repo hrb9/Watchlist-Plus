@@ -2,7 +2,7 @@
 name: Container-Specific CI/CD Pipeline
 
 permissions:
-  contents: read
+  contents: write  # Change from 'read' to 'write'
   security-events: write
   packages: write
   actions: write
@@ -196,8 +196,8 @@ jobs:
       - name: Commit version updates
         if: github.event_name != 'pull_request'
         run: |
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action"
+          git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
           git add versions/
           
           # Only commit if there are changes
@@ -205,5 +205,5 @@ jobs:
             echo "No version changes to commit"
           else
             git commit -m "Update container versions [skip ci]"
-            git push https://${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git HEAD:${{ github.ref }}
+            git push "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" HEAD:${{ github.ref }}
           fi
