@@ -1,5 +1,5 @@
 # .github/workflows/main-pipeline.yml
-name: main-pipeline
+name: Container-Specific CI/CD Pipeline
 
 permissions:
   contents: read
@@ -10,12 +10,77 @@ permissions:
 on:
   push:
     branches: [ "main" ]
+    paths:
+      - 'recbyhistory/**'
+      - 'plexauthgui/**'
+      - 'getimdbid/**'
+      - 'watchlistrequests/**'
+      - '.github/workflows/**'
   pull_request:
     branches: [ "main" ]
 
 jobs:
-  build-and-scan:
+  analyze-changes:
     runs-on: ubuntu-latest
+    outputs:
+      recbyhistory_changed: ${{ steps.check-changes.outputs.recbyhistory_changed }}
+      plexauthgui_changed: ${{ steps.check-changes.outputs.plexauthgui_changed }}
+      getimdbid_changed: ${{ steps.check-changes.outputs.getimdbid_changed }}
+      watchlistrequests_changed: ${{ steps.check-changes.outputs.watchlistrequests_changed }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0  # Fetch all history for change detection
+
+      - name: Check for changes in each container
+        id: check-changes
+        run: |
+          # Get the list of changed files
+          if [ "${{ github.event_name }}" == "pull_request" ]; then
+            CHANGED_FILES=$(git diff --name-only ${{ github.event.pull_request.base.sha }} ${{ github.event.pull_request.head.sha }})
+          else
+            # For push events, compare with the previous commit
+            CHANGED_FILES=$(git diff --name-only HEAD^ HEAD)
+          fi
+          
+          echo "Changed files:"
+          echo "$CHANGED_FILES"
+          
+          # Check if specific directories have changes
+          if echo "$CHANGED_FILES" | grep -q "^recbyhistory/"; then
+            echo "recbyhistory_changed=true" >> $GITHUB_OUTPUT
+            echo "recbyhistory container has changes"
+          else
+            echo "recbyhistory_changed=false" >> $GITHUB_OUTPUT
+          fi
+          
+          if echo "$CHANGED_FILES" | grep -q "^plexauthgui/"; then
+            echo "plexauthgui_changed=true" >> $GITHUB_OUTPUT
+            echo "plexauthgui container has changes"
+          else
+            echo "plexauthgui_changed=false" >> $GITHUB_OUTPUT
+          fi
+          
+          if echo "$CHANGED_FILES" | grep -q "^getimdbid/"; then
+            echo "getimdbid_changed=true" >> $GITHUB_OUTPUT
+            echo "getimdbid container has changes"
+          else
+            echo "getimdbid_changed=false" >> $GITHUB_OUTPUT
+          fi
+          
+          if echo "$CHANGED_FILES" | grep -q "^watchlistrequests/"; then
+            echo "watchlistrequests_changed=true" >> $GITHUB_OUTPUT
+            echo "watchlistrequests container has changes"
+          else
+            echo "watchlistrequests_changed=false" >> $GITHUB_OUTPUT
+          fi
+
+  build-containers:
+    needs: analyze-changes
+    runs-on: ubuntu-latest
+    
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
@@ -28,18 +93,59 @@ jobs:
       - name: CodeQL Analyze
         uses: github/codeql-action/analyze@v3
 
-      - name: Bump version
+      - name: Setup version control
+        run: |
+          mkdir -p versions
+          # Create version files if they don't exist
+          if [ ! -f versions/recbyhistory.version ]; then echo "0.1.0" > versions/recbyhistory.version; fi
+          if [ ! -f versions/plexauthgui.version ]; then echo "0.1.0" > versions/plexauthgui.version; fi
+          if [ ! -f versions/getimdbid.version ]; then echo "0.1.0" > versions/getimdbid.version; fi
+          if [ ! -f versions/watchlistrequests.version ]; then echo "0.1.0" > versions/watchlistrequests.version; fi
+
+      - name: Bump versions for changed containers
         id: bump
         run: |
-          chmod +x scripts/bump_version.sh
-          newver=$(./scripts/bump_version.sh | grep "New version" | awk '{print $3}')
-          echo "version=$newver" >> $GITHUB_OUTPUT
-
-      - name: AI Summary
-        run: |
-          echo "AI Summary: (Mock) Summarizing changes in main..."
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          # Function to bump a container's version
+          bump_version() {
+            CONTAINER=$1
+            CURRENT_VERSION=$(cat versions/${CONTAINER}.version)
+            IFS='.' read -ra VERSION_PARTS <<< "$CURRENT_VERSION"
+            MAJOR=${VERSION_PARTS[0]}
+            MINOR=${VERSION_PARTS[1]}
+            PATCH=${VERSION_PARTS[2]}
+            
+            # Increment patch version
+            PATCH=$((PATCH + 1))
+            NEW_VERSION="${MAJOR}.${MINOR}.${PATCH}"
+            echo $NEW_VERSION > versions/${CONTAINER}.version
+            echo "${CONTAINER}_version=${NEW_VERSION}" >> $GITHUB_OUTPUT
+            echo "Bumped ${CONTAINER} version from ${CURRENT_VERSION} to ${NEW_VERSION}"
+          }
+          
+          # Bump versions only for changed containers
+          if [ "${{ needs.analyze-changes.outputs.recbyhistory_changed }}" == "true" ]; then
+            bump_version "recbyhistory"
+          else
+            echo "recbyhistory_version=$(cat versions/recbyhistory.version)" >> $GITHUB_OUTPUT
+          fi
+          
+          if [ "${{ needs.analyze-changes.outputs.plexauthgui_changed }}" == "true" ]; then
+            bump_version "plexauthgui"
+          else
+            echo "plexauthgui_version=$(cat versions/plexauthgui.version)" >> $GITHUB_OUTPUT
+          fi
+          
+          if [ "${{ needs.analyze-changes.outputs.getimdbid_changed }}" == "true" ]; then
+            bump_version "getimdbid"
+          else
+            echo "getimdbid_version=$(cat versions/getimdbid.version)" >> $GITHUB_OUTPUT
+          fi
+          
+          if [ "${{ needs.analyze-changes.outputs.watchlistrequests_changed }}" == "true" ]; then
+            bump_version "watchlistrequests"
+          else
+            echo "watchlistrequests_version=$(cat versions/watchlistrequests.version)" >> $GITHUB_OUTPUT
+          fi
 
       - name: Login to GHCR
         run: |
@@ -53,26 +159,51 @@ jobs:
         with:
           driver: docker-container
       
-      - name: Build WatchlistPlusContiners Docker Images for Multiple Architectures
+      - name: Build and Push Changed Containers
         working-directory: ${{ github.workspace }}
         run: |
           REPO=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
-          VERSION=${{ steps.bump.outputs.version }}
+          
+          # Function to build and push container
+          build_container() {
+            CONTAINER=$1
+            VERSION=$2
+            CHANGED=$3
+            
+            if [ "$CHANGED" == "true" ]; then
+              echo "Building and pushing ${CONTAINER} container (version ${VERSION})..."
+              
+              # Multi-platform build and push in one step
+              docker buildx build \
+                --platform linux/amd64,linux/arm64/v8 \
+                --push \
+                -t ghcr.io/${REPO}/${CONTAINER}:${VERSION} \
+                -t ghcr.io/${REPO}/${CONTAINER}:latest \
+                -f ${CONTAINER}/Dockerfile .
+                
+              echo "${CONTAINER} container updated to version ${VERSION}"
+            else
+              echo "Skipping ${CONTAINER} container (no changes detected)"
+            fi
+          }
+          
+          # Build and push changed containers
+          build_container "recbyhistory" "${{ steps.bump.outputs.recbyhistory_version }}" "${{ needs.analyze-changes.outputs.recbyhistory_changed }}"
+          build_container "plexauthgui" "${{ steps.bump.outputs.plexauthgui_version }}" "${{ needs.analyze-changes.outputs.plexauthgui_changed }}"
+          build_container "getimdbid" "${{ steps.bump.outputs.getimdbid_version }}" "${{ needs.analyze-changes.outputs.getimdbid_changed }}"
+          build_container "watchlistrequests" "${{ steps.bump.outputs.watchlistrequests_version }}" "${{ needs.analyze-changes.outputs.watchlistrequests_changed }}"
       
-          echo "Building WatchlistPlus Continers image for amd64..."
-          docker buildx build --platform linux/amd64 --load -t ghcr.io/$REPO/recbyhistory:main-${VERSION}-amd64 -f recbyhistory/Dockerfile .
-          docker buildx build --platform linux/amd64 --load -t ghcr.io/$REPO/plexauthgui:main-${VERSION}-amd64 -f plexauthgui/Dockerfile .
-          docker buildx build --platform linux/amd64 --load -t ghcr.io/$REPO/getimdbid:main-${VERSION}-amd64 -f getimdbid/Dockerfile .
-          docker buildx build --platform linux/amd64 --load -t ghcr.io/$REPO/watchlistrequests:main-${VERSION}-amd64 -f watchlistrequests/Dockerfile .
-
-          echo "Building WatchlistPlus Continers image for arm64..."
-          docker buildx build --platform linux/arm64/v8 --load -t ghcr.io/$REPO/recbyhistory:main-${VERSION}-arm64 -f recbyhistory/Dockerfile .
-          docker buildx build --platform linux/arm64/v8 --load -t ghcr.io/$REPO/plexauthgui:main-${VERSION}-arm64 -f plexauthgui/Dockerfile .
-          docker buildx build --platform linux/arm64/v8 --load -t ghcr.io/$REPO/getimdbid:main-${VERSION}-arm64 -f getimdbid/Dockerfile .
-          docker buildx build --platform linux/arm64/v8 --load -t ghcr.io/$REPO/watchlistrequests:main-${VERSION}-arm64 -f watchlistrequests/Dockerfile .
-      
-          echo "Creating multi-architecture manifest image for WatchlistPlus Continers and pushing..."
-          docker buildx build --platform linux/amd64,linux/arm64/v8 --push -t ghcr.io/$REPO/recbyhistory:main-${VERSION} -t ghcr.io/$REPO/recbyhistory:latest -f recbyhistory/Dockerfile .
-          docker buildx build --platform linux/amd64,linux/arm64/v8 --push -t ghcr.io/$REPO/plexauthgui:main-${VERSION} -t ghcr.io/$REPO/plexauthgui:latest -f plexauthgui/Dockerfile .
-          docker buildx build --platform linux/amd64,linux/arm64/v8 --push -t ghcr.io/$REPO/getimdbid:main-${VERSION} -t ghcr.io/$REPO/getimdbid:latest -f getimdbid/Dockerfile .
-          docker buildx build --platform linux/amd64,linux/arm64/v8 --push -t ghcr.io/$REPO/watchlistrequests:main-${VERSION} -t ghcr.io/$REPO/watchlistrequests:latest -f watchlistrequests/Dockerfile .
+      - name: Commit version updates
+        if: github.event_name != 'pull_request'
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add versions/
+          
+          # Only commit if there are changes
+          if git diff --staged --quiet; then
+            echo "No version changes to commit"
+          else
+            git commit -m "Update container versions [skip ci]"
+            git push https://${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git HEAD:${{ github.ref }}
+          fi
