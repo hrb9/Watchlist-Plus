@@ -12,6 +12,15 @@ from config import ITEMS_PER_GROUP, OVERSEERR_URL, OVERSEERR_API_TOKEN
 import logging
 import datetime
 from pathlib import Path
+import asyncio
+import nest_asyncio
+from concurrent.futures import ThreadPoolExecutor
+
+# Apply nest_asyncio to allow nested event loops (important for thread contexts)
+try:
+    nest_asyncio.apply()
+except Exception as e:
+    print(f"Warning: Could not apply nest_asyncio: {e}")
 
 # Control variables
 NUM_MOVIES = 3
@@ -24,7 +33,14 @@ TMDB_IMAGE_BASE_URL = "https://image.tmdb.org/t/p/w500"
 
 def init_gemini_client():
     """Initialize Gemini client with API key"""
-    try:
+    try:        # Ensure we have an event loop in this thread
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            # If no event loop exists in this thread, create one
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
         return genai.Client(api_key=os.environ.get("GEMINI_API_KEY", ""))
     except Exception as e:
         print(f"Error initializing Gemini client: {e}")
@@ -430,9 +446,28 @@ def generate_discovery_recommendations(user_id: str, gemini_api_key: str, tmdb_a
     os.environ["GEMINI_API_KEY"] = gemini_api_key
     os.environ["TMDB_API_KEY"] = tmdb_api_key
     
+    # Define fallback recommendations in case things fail
+    fallback_recommendations = [
+        {"title": "The Shawshank Redemption", "imdb_id": "tt0111161", 
+         "image_url": "https://image.tmdb.org/t/p/w500/q6y0Go1tsGEsmtFryDOJo3dEmqu.jpg"},
+        {"title": "The Godfather", "imdb_id": "tt0068646", 
+         "image_url": "https://image.tmdb.org/t/p/w500/3bhkrj58Vtu7enYsRolD1fZdja1.jpg"},
+        {"title": "Pulp Fiction", "imdb_id": "tt0110912", 
+         "image_url": "https://image.tmdb.org/t/p/w500/d5iIlFn5s0ImszYzBPb8JPIfbXD.jpg"},
+        {"title": "Breaking Bad", "imdb_id": "tt0903747", 
+         "image_url": "https://image.tmdb.org/t/p/w500/ggFHVNu6YYI5L9pCfOacjizRGt.jpg"},
+        {"title": "Stranger Things", "imdb_id": "tt4574334", 
+         "image_url": "https://image.tmdb.org/t/p/w500/49WJfeN0moxb9IPfGn8AIqMGskD.jpg"}
+    ]
+    
     db = Database(user_id)
     
+    # Check if we have history items
     items = db.get_all_items()
+    if not items:
+        print(f"No history items found for user {user_id}, using fallbacks")
+        return fallback_recommendations
+    
     user_history_text = ""
     for row in items:
         if row[1] and row[2]:  # Make sure we have title and imdb_id
@@ -441,6 +476,15 @@ def generate_discovery_recommendations(user_id: str, gemini_api_key: str, tmdb_a
     print(f"Found {len(items)} history items for user")
     
     taste = db.get_latest_user_taste(user_id) or ""
+    
+    # Create a specific prompt for discovery
+    discovery_prompt = f"""
+Based on the user's watch history and taste, recommend {num_movies} movies and {num_series} TV shows.
+The recommendations should be highly personalized and diverse.
+{extra_elements if extra_elements else ""}
+
+Please focus on quality content that matches the user's taste profile but introduces new elements.
+"""
     
     system_instruction = (
         "You will receive a user's watch history, taste description, and discovery elements.\n\n"
@@ -458,7 +502,8 @@ def generate_discovery_recommendations(user_id: str, gemini_api_key: str, tmdb_a
     
     client = init_gemini_client()
     if not client:
-        return []
+        print("Failed to initialize Gemini client, returning fallback recommendations")
+        return fallback_recommendations
         
     config = GenerateContentConfig(
         system_instruction=system_instruction,
@@ -471,8 +516,9 @@ def generate_discovery_recommendations(user_id: str, gemini_api_key: str, tmdb_a
     )
     
     try:
+        # FIX: Send the actual discovery prompt instead of empty string
         response = client.models.generate_content(
-            contents="",
+            contents=discovery_prompt,
             model="gemini-2.0-flash-exp",
             config=config,
         )
@@ -481,13 +527,18 @@ def generate_discovery_recommendations(user_id: str, gemini_api_key: str, tmdb_a
         cleaned_text = clean_json_output(raw_output)
         recommendations = json.loads(cleaned_text)
         print(f"Parsed {len(recommendations)} recommendations from AI")
+        
+        if not recommendations:
+            print("AI returned empty recommendations, using fallbacks")
+            return fallback_recommendations
+            
     except json.JSONDecodeError as je:
         print(f"Error parsing JSON: {je}")
         print(f"Problematic JSON: {cleaned_text[:200]}...")
-        recommendations = []
+        return fallback_recommendations
     except Exception as e:
         print(f"Error generating discovery recommendations: {e}")
-        recommendations = []
+        return fallback_recommendations
     
     updated_recommendations = update_recommendations_with_images(recommendations)
     watched_imdbs = {row[2] for row in items if row[2]}
@@ -496,6 +547,11 @@ def generate_discovery_recommendations(user_id: str, gemini_api_key: str, tmdb_a
     print(f"Final recommendations after filtering: {len(final_recs)}")
     for rec in final_recs:
         print(f"Recommendation: {rec.get('title')} (IMDB ID: {rec.get('imdb_id')})")
+    
+    # If we end up with no recommendations after filtering, return fallbacks
+    if not final_recs:
+        print("No recommendations after filtering, using fallbacks")
+        return fallback_recommendations
     
     # Save recommendations to database
     try:
@@ -513,3 +569,9 @@ def generate_discovery_recommendations(user_id: str, gemini_api_key: str, tmdb_a
             print("Failed to push discovery recommendations to Overseerr.")
             
     return final_recs
+
+def run_monthly_task(user_id):
+    """Run the monthly recommendations task for a specific user"""
+    print(f"Running monthly task for user {user_id}")
+    db = Database(user_id)
+    print_history_groups(db)
