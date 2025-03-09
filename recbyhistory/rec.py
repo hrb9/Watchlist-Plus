@@ -575,3 +575,4 @@ def run_monthly_task(user_id):
     print(f"Running monthly task for user {user_id}")
     db = Database(user_id)
     print_history_groups(db)
+#recbyhistory
