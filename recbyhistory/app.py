@@ -4,7 +4,6 @@ import os
 import uvicorn
 import requests
 import logging
-import contextlib
 from datetime import datetime, timedelta
 from contextlib import asynccontextmanager
 
@@ -213,40 +212,27 @@ def check_new_users():
             run_monthly_task(user_id)
 
 # ----------------- Lifespan Event Handler -----------------
-def setup_asyncio():
-    """Initialize asyncio for FastAPI to ensure event loops work properly"""
-    try:
-        import nest_asyncio
-        nest_asyncio.apply()
-        print("Applied nest_asyncio successfully")
-    except ImportError:
-        print("nest_asyncio not available, skipping")
-    except Exception as e:
-        print(f"Error setting up asyncio: {e}")
-
-setup_asyncio()
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Initialize dependencies and clean up resources"""
-    print("Starting recbyhistory service...")
-    
-    # Ensure event loop is configured properly
-    with contextlib.suppress(Exception):
-        import asyncio
-        try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-    
-    # Create scheduler
     scheduler = BackgroundScheduler()
+    
+    # Check for new users every 10 seconds
+    scheduler.add_job(check_new_users, IntervalTrigger(seconds=10))
+    
+    # Regular tasks every hour
+    scheduler.add_job(process_all_users, IntervalTrigger(hours=1))
+    
     scheduler.start()
-    yield
-    # Shutdown scheduler
-    scheduler.shutdown()
-    print("Shutting down recbyhistory service...")
+    
+    logging.info("Application startup: initializing scheduled tasks.")
+    # Run both checks immediately on startup
+    check_new_users()
+    process_all_users()
+    
+    try:
+        yield
+    finally:
+        scheduler.shutdown()
 
 app = FastAPI(
     title="RecByHistory",
@@ -380,37 +366,21 @@ def get_monthly_recommendations(user_id: str):
 def post_discovery_recommendations(request: DiscoveryRequest):
     logging.info(f"Received discovery recommendations request for user {request.user_id}")
     
-    try:
-        # Force set the environment variables for this request
-        os.environ["GEMINI_API_KEY"] = request.gemini_api_key
-        os.environ["TMDB_API_KEY"] = request.tmdb_api_key
-        
-        # Get the recommendations
-        final_recs = generate_discovery_recommendations(
-            user_id=request.user_id,
-            gemini_api_key=request.gemini_api_key,
-            tmdb_api_key=request.tmdb_api_key,
-            num_movies=request.num_movies,
-            num_series=request.num_series,
-            extra_elements=request.extra_elements
-        )
-        
-        # Log what we're returning for debugging
-        logging.info(f"Generated {len(final_recs)} discovery recommendations")
-        
-        # Return with the proper field name expected by the frontend
-        return {"discovery_recommendations": final_recs}
-    except Exception as e:
-        logging.error(f"Error in discovery recommendations: {e}", exc_info=True)
-        # Return fallback recommendations
-        return {"discovery_recommendations": [
-            {"title": "The Shawshank Redemption", "imdb_id": "tt0111161", 
-             "image_url": "https://image.tmdb.org/t/p/w500/q6y0Go1tsGEsmtFryDOJo3dEmqu.jpg"},
-            {"title": "The Godfather", "imdb_id": "tt0068646", 
-             "image_url": "https://image.tmdb.org/t/p/w500/3bhkrj58Vtu7enYsRolD1fZdja1.jpg"},
-            {"title": "Breaking Bad", "imdb_id": "tt0903747", 
-             "image_url": "https://image.tmdb.org/t/p/w500/ggFHVNu6YYI5L9pCfOacjizRGt.jpg"}
-        ]}
+    # Get the recommendations
+    final_recs = generate_discovery_recommendations(
+        user_id=request.user_id,
+        gemini_api_key=request.gemini_api_key,
+        tmdb_api_key=request.tmdb_api_key,
+        num_movies=request.num_movies,
+        num_series=request.num_series,
+        extra_elements=request.extra_elements
+    )
+    
+    # Log what we're returning for debugging
+    logging.info(f"Generated {len(final_recs)} discovery recommendations")
+    
+    # Return with the proper field name expected by the frontend
+    return {"discovery_recommendations": final_recs}
 
 @app.post("/ai_search")
 def ai_search(request: AISearchRequest):
