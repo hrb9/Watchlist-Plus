@@ -145,6 +145,7 @@ def add_discover_slider(title, search_id, slider_type=1):
         "title": title,
         "type": slider_type,
         "enabled": "true",
+        "isBuiltIn": "true", 
         "data": str(search_id)
     }
     
