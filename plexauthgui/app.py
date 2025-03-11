@@ -144,6 +144,7 @@ def add_discover_slider(title, search_id, slider_type=1):
     payload = {
         "title": title,
         "type": slider_type,
+        "enabled": True,
         "data": str(search_id)
     }
     
