@@ -124,33 +124,24 @@ def get_token_for_user(user_id):
 def add_discover_slider(title, search_id, slider_type=1):
     """
     Adds a new discover slider setting to Overseerr.
-
-    This function sends a POST request to Overseerr's API endpoint to add a new discover slider.
-    The payload includes a title, type, and data field, where the data field is set to the provided search ID.
-
-    Args:
-        title (str): The title for the slider.
-        search_id (int or str): The search ID to be used in the data field.
-        slider_type (int, optional): The type of the slider. Defaults to 1.
-
-    Returns:
-        dict: The JSON response from Overseerr or error details.
     """
-    # Use the environment variable for Overseerr URL; default to localhost if not set.
     overseerr_url = os.environ.get("OVERSEERR_URL", "http://localhost:5055")
     endpoint = f"{overseerr_url}/api/v1/settings/discover/add"
     
     # Get API key from environment
     overseerr_api_key = os.environ.get("OVERSEERR_API_KEY", "")
     
+    if not overseerr_api_key:
+        return {"error": "No Overseerr API key found in environment variables"}
+    
     # Setup headers with API key authorization
     headers = {
         "accept": "application/json",
         "Content-Type": "application/json",
-        "X-Api-Key": overseerr_api_key  # Add API key for authentication
+        "X-Api-Key": overseerr_api_key
     }
     
-    # Build the payload. In the "data" field, we include the search ID.
+    # Build the payload with Overseerr media IDs in the data field
     payload = {
         "title": title,
         "type": slider_type,
@@ -158,7 +149,11 @@ def add_discover_slider(title, search_id, slider_type=1):
     }
     
     try:
+        print(f"Sending request to Overseerr: {endpoint}")
+        print(f"Payload: {payload}")
         response = requests.post(endpoint, json=payload, headers=headers)
+        print(f"Response status: {response.status_code}")
+        print(f"Response body: {response.text}")
         response.raise_for_status()
         logging.info(f"Successfully added discover slider: {title}")
         return response.json()
@@ -407,21 +402,56 @@ def add_monthly_to_overseerr():
         if not recommendations:
             return jsonify({'error': 'No monthly recommendations found'}), 404
         
-        # Format for Overseerr - extract IMDb IDs
-        imdb_ids = [rec.get('imdb_id') for rec in recommendations if rec.get('imdb_id')]
+        # Need to convert IMDB IDs to Overseerr media IDs
+        getimdbid_url = os.environ.get("GETIMDBID_URL", "http://getimdbid:5331")
+        overseerr_ids = []
         
+        for rec in recommendations:
+            imdb_id = rec.get('imdb_id')
+            title = rec.get('title')
+            
+            if not imdb_id or not title:
+                continue
+                
+            # Call convert_ids API to get Overseerr ID
+            try:
+                payload = {
+                    "imdb_id": imdb_id,
+                    "media_type": "movie",  # Default to movie, you might want to detect this
+                    "title": title
+                }
+                
+                convert_response = requests.post(
+                    f"{getimdbid_url}/convert_ids", 
+                    json=payload, 
+                    timeout=10
+                )
+                
+                if convert_response.status_code == 200:
+                    result = convert_response.json()
+                    overseerr_id = result.get('overseerr_id')
+                    if overseerr_id:
+                        overseerr_ids.append(str(overseerr_id))
+                        print(f"Converted {imdb_id} ({title}) to Overseerr ID: {overseerr_id}")
+            except Exception as e:
+                print(f"Error converting ID for {title}: {e}")
+        
+        if not overseerr_ids:
+            return jsonify({'error': 'Could not convert any IMDb IDs to Overseerr IDs'}), 400
+            
         # Create a slider title with user ID and date
         import datetime
         today = datetime.datetime.now().strftime("%Y-%m-%d")
         slider_title = f"Monthly Picks for {user_id} ({today})"
         
-        # Call add_discover_slider 
-        result = add_discover_slider(slider_title, ",".join(imdb_ids), 1)
+        # Call add_discover_slider with comma-separated Overseerr IDs
+        result = add_discover_slider(slider_title, ",".join(overseerr_ids), 1)
         
         return jsonify({
             'status': 'success' if 'error' not in result else 'error',
             'message': 'Added recommendations to Overseerr' if 'error' not in result else result.get('error'),
-            'details': result
+            'details': result,
+            'converted_ids': overseerr_ids
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
