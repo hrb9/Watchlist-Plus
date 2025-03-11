@@ -1,3 +1,15 @@
-flask
+fastapi
+uvicorn
 requests
+pydantic
+tiktoken
+google-genai
 plexapi
+apscheduler
+flask
+imdbmovies
+nest_asyncio
+
+
+
+
