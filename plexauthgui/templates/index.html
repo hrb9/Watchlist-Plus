@@ -40,6 +40,20 @@
   <button id="authenticatePlex" class="btn btn-warning" onclick="activateScript()">Authenticate with Plex</button>
   <div id="statusArea" class="mt-3"></div>
 
+  <!-- API Keys Section - Add after authentication -->
+  <div id="apiKeysSection" class="mt-4" style="display: none;">
+    <h4>API Keys</h4>
+    <div class="mb-3">
+      <label for="geminiApiKey" class="form-label">Gemini API Key</label>
+      <input type="password" class="form-control" id="geminiApiKey" placeholder="Enter your Gemini API key">
+    </div>
+    <div class="mb-3">
+      <label for="tmdbApiKey" class="form-label">TMDB API Key</label>
+      <input type="password" class="form-control" id="tmdbApiKey" placeholder="Enter your TMDB API key">
+    </div>
+    <button onclick="saveApiKeys()" class="btn btn-primary">Save Keys</button>
+  </div>
+
   <!-- חלק שמוצג רק אחרי התחברות -->
   <div id="searchSection" class="mt-4">
     <h3>AI Search</h3>
@@ -57,12 +71,8 @@
 
     <h3>Monthly Recommendations</h3>
     <button class="btn btn-info" onclick="fetchMonthly()">Get Monthly Recs</button>
+    <button class="btn btn-success ml-2" onclick="addMonthlyToOverseerr()">Add to Overseerr</button>
     <div id="monthlyContainer" class="mt-3"></div>
-  </div>
-
-  <div id="adminSection" style="display:none;">
-    <h3>Admin Tools</h3>
-    <a href="http://watchlistrequests:5333" class="btn btn-primary">Watchlist Requests Dashboard</a>
   </div>
 </div>
 
@@ -94,13 +104,32 @@ function checkForAuthToken(pinId) {
         // מציגים את אלמנטי החיפוש וההמלצות
         document.getElementById('searchSection').style.display = 'block';
         document.getElementById('recommendationSection').style.display = 'block';
-        if (data.is_admin) {
-          document.getElementById('adminSection').style.display = 'block';
-        }
+        
+        // Show API keys section
+        document.getElementById('apiKeysSection').style.display = 'block';
       } else {
         setTimeout(() => checkForAuthToken(pinId), 3000);
       }
     });
+}
+
+// Store API keys in local storage
+function saveApiKeys() {
+  const geminiKey = document.getElementById('geminiApiKey').value;
+  const tmdbKey = document.getElementById('tmdbApiKey').value;
+  
+  if(geminiKey) localStorage.setItem('geminiApiKey', geminiKey);
+  if(tmdbKey) localStorage.setItem('tmdbApiKey', tmdbKey);
+  
+  alert('API keys saved!');
+}
+
+// Get keys for use in requests
+function getApiKeys() {
+  return {
+    gemini: localStorage.getItem('geminiApiKey') || '',
+    tmdb: localStorage.getItem('tmdbApiKey') || ''
+  };
 }
 
 function performSearch() {
@@ -109,10 +138,18 @@ function performSearch() {
     alert("Not authenticated yet!");
     return;
   }
+  
+  const keys = getApiKeys();
+  
   fetch('/search_ai', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ query, user_id: currentUserId })
+    body: JSON.stringify({ 
+      query, 
+      user_id: currentUserId,
+      gemini_api_key: keys.gemini,
+      tmdb_api_key: keys.tmdb
+    })
   })
   .then(r => r.json())
   .then(data => {
@@ -126,10 +163,16 @@ function performSearch() {
 }
 
 function fetchDiscovery() {
+  const keys = getApiKeys();
+  
   fetch('/discovery', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ user_id: currentUserId })
+    body: JSON.stringify({ 
+      user_id: currentUserId,
+      gemini_api_key: keys.gemini,
+      tmdb_api_key: keys.tmdb
+    })
   })
   .then(r => r.json())
   .then(data => {
@@ -143,7 +186,9 @@ function fetchDiscovery() {
 }
 
 function fetchMonthly() {
-  fetch(`/monthly_recs?user_id=${currentUserId}`)
+  const keys = getApiKeys();
+  
+  fetch(`/monthly_recs?user_id=${currentUserId}&gemini_api_key=${keys.gemini}&tmdb_api_key=${keys.tmdb}`)
   .then(r => r.json())
   .then(data => {
     if (data.monthly_recommendations) {
@@ -178,12 +223,16 @@ function displayCarousel(itemsArray, containerId) {
     const imageUrl = item.image_url || 'https://via.placeholder.com/400x300?text=No+Image';
     const imdbId = item.imdb_id || '';
 
+    // Only show watchlist button if not in monthly container
+    const watchlistButton = containerId !== 'monthlyContainer' ? 
+      `<button class="btn btn-danger" onclick="addToWatchlist('${imdbId}','movie')">Add to Watchlist</button>` : '';
+
     html += `
       <div class="carousel-item ${activeClass}">
         <img src="${imageUrl}" class="d-block w-100" alt="${title}">
         <div class="carousel-caption d-none d-md-block">
           <h5>${title}</h5>
-          <button class="btn btn-danger" onclick="addToWatchlist('${imdbId}','movie')">Add to Watchlist</button>
+          ${watchlistButton}
         </div>
       </div>
     `;
@@ -220,6 +269,31 @@ function addToWatchlist(imdb_id, media_type='movie') {
     }
   })
   .catch(e => console.error(e));
+}
+
+function addMonthlyToOverseerr() {
+  if (!currentUserId) {
+    alert("Not authenticated yet!");
+    return;
+  }
+  
+  fetch('/add_monthly_to_overseerr', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ user_id: currentUserId })
+  })
+  .then(r => r.json())
+  .then(data => {
+    if (data.status === 'success') {
+      alert('Monthly recommendations added to Overseerr!');
+    } else {
+      alert('Error: ' + data.message);
+    }
+  })
+  .catch(e => {
+    console.error(e);
+    alert('Error adding recommendations to Overseerr');
+  });
 }
 </script>
 

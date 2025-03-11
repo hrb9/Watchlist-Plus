@@ -5,6 +5,7 @@ import os
 from datetime import datetime
 from urllib.parse import urlencode
 from plexapi.myplex import MyPlexAccount
+import logging
 
 app = Flask(__name__)
 
@@ -119,6 +120,48 @@ def get_token_for_user(user_id):
     conn.close()
     return result[0] if result else None
 
+# Add the provided function
+def add_discover_slider(title, search_id, slider_type=1):
+    """
+    Adds a new discover slider setting to Overseerr.
+
+    This function sends a POST request to Overseerr's API endpoint to add a new discover slider.
+    The payload includes a title, type, and data field, where the data field is set to the provided search ID.
+
+    Args:
+        title (str): The title for the slider.
+        search_id (int or str): The search ID to be used in the data field.
+        slider_type (int, optional): The type of the slider. Defaults to 1.
+
+    Returns:
+        dict: The JSON response from Overseerr or error details.
+    """
+    # Use the environment variable for Overseerr URL; default to localhost if not set.
+    overseerr_url = os.environ.get("OVERSEERR_URL", "http://localhost:5055")
+    endpoint = f"{overseerr_url}/api/v1/settings/discover/add"
+    
+    # Setup headers.
+    headers = {
+        "accept": "application/json",
+        "Content-Type": "application/json"
+    }
+    
+    # Build the payload. In the "data" field, we include the search ID.
+    payload = {
+        "title": title,
+        "type": slider_type,
+        "data": str(search_id)
+    }
+    
+    try:
+        response = requests.post(endpoint, json=payload, headers=headers)
+        response.raise_for_status()
+        logging.info(f"Successfully added discover slider: {title}")
+        return response.json()
+    except Exception as e:
+        logging.error(f"Error adding discover slider: {e}")
+        return {"error": str(e)}
+
 # === Routes for PIN auth ===
 @app.route('/')
 def index():
@@ -142,7 +185,7 @@ def check_token(pin_id):
     )
     r_json = r.json()
     auth_token = r_json.get("authToken")
-    if auth_token:
+    if (auth_token):
         plex_account = MyPlexAccount(token=auth_token)
         user_id = plex_account.username
         
@@ -192,10 +235,14 @@ def get_user_info(token):
 # === API for search & recbyhistory integration ===
 @app.route('/search_ai', methods=['POST'])
 def search_ai():
-    """Calls recbyhistory's /ai_search endpoint with the query and user_id."""
     data = request.json
     query = data.get('query')
     user_id = data.get('user_id')
+    # Get keys from request or fall back to environment variables
+    gemini_api_key = data.get('gemini_api_key') or os.environ.get("GEMINI_API_KEY", "")
+    tmdb_api_key = data.get('tmdb_api_key') or os.environ.get("TMDB_API_KEY", "")
+    
+    # Rest of the function using these keys...
     if not query or not user_id:
         return jsonify({'error': 'Missing query or user_id'}), 400
 
@@ -204,16 +251,21 @@ def search_ai():
 
     payload = {
         'user_id': user_id,
-        'gemini_api_key': os.environ.get("GEMINI_API_KEY", ""),
-        'tmdb_api_key': os.environ.get("TMDB_API_KEY", ""),
+        'gemini_api_key': gemini_api_key,
+        'tmdb_api_key': tmdb_api_key,
         'query': query
     }
     try:
         r = requests.post(ai_search_url, json=payload, timeout=10)
         r.raise_for_status()
-        return jsonify(r.json())
+        response_data = r.json()
+        # Ensure search_results is a valid array
+        if 'search_results' not in response_data or not isinstance(response_data['search_results'], list):
+            return jsonify({'search_results': []})
+        return jsonify(response_data)
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        print(f"Search error: {e}")
+        return jsonify({'search_results': []}), 200  # Return empty array instead of error
 
 @app.route('/discovery', methods=['POST'])
 def discovery():
@@ -321,6 +373,43 @@ def add_to_watchlist_gui():
         r = requests.post(f"{watchlist_url}/api/request", json=data, timeout=10)
         r.raise_for_status()
         return jsonify(r.json())
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/add_monthly_to_overseerr', methods=['POST'])
+def add_monthly_to_overseerr():
+    """Add monthly recommendations to Overseerr discover sliders"""
+    data = request.json
+    user_id = data.get('user_id')
+    
+    # Get monthly recommendations
+    recbyhistory_url = os.environ.get("RECBYHISTORY_URL", "http://recbyhistory:5335")
+    monthly_url = f"{recbyhistory_url}/monthly_recommendations?user_id={user_id}"
+    
+    try:
+        r = requests.get(monthly_url, timeout=30)
+        r.raise_for_status()
+        
+        recommendations = r.json().get('monthly_recommendations', [])
+        if not recommendations:
+            return jsonify({'error': 'No monthly recommendations found'}), 404
+        
+        # Format for Overseerr - extract IMDb IDs
+        imdb_ids = [rec.get('imdb_id') for rec in recommendations if rec.get('imdb_id')]
+        
+        # Create a slider title with user ID and date
+        import datetime
+        today = datetime.datetime.now().strftime("%Y-%m-%d")
+        slider_title = f"Monthly Picks for {user_id} ({today})"
+        
+        # Call add_discover_slider 
+        result = add_discover_slider(slider_title, ",".join(imdb_ids), 1)
+        
+        return jsonify({
+            'status': 'success' if 'error' not in result else 'error',
+            'message': 'Added recommendations to Overseerr' if 'error' not in result else result.get('error'),
+            'details': result
+        })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
