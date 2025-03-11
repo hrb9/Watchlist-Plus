@@ -120,7 +120,6 @@ def get_token_for_user(user_id):
     conn.close()
     return result[0] if result else None
 
-# Add the provided function
 def add_discover_slider(title, search_id, slider_type=1):
     """
     Adds a new discover slider setting to Overseerr.
@@ -444,8 +443,10 @@ def add_monthly_to_overseerr():
         today = datetime.datetime.now().strftime("%Y-%m-%d")
         slider_title = f"Monthly Picks for {user_id} ({today})"
         
-        # Call add_discover_slider with comma-separated Overseerr IDs
-        result = add_discover_slider(slider_title, ",".join(overseerr_ids), 1)
+        # Format for Overseerr - extract IMDb IDs
+        imdb_ids = [rec.get('imdb_id') for rec in recommendations if rec.get('imdb_id')]
+        # Call add_discover_slider with comma-separated IMDb IDs
+        result = add_discover_slider(slider_title, ",".join(imdb_ids), 1)
         
         return jsonify({
             'status': 'success' if 'error' not in result else 'error',
