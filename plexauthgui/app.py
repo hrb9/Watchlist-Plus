@@ -140,10 +140,14 @@ def add_discover_slider(title, search_id, slider_type=1):
     overseerr_url = os.environ.get("OVERSEERR_URL", "http://localhost:5055")
     endpoint = f"{overseerr_url}/api/v1/settings/discover/add"
     
-    # Setup headers.
+    # Get API key from environment
+    overseerr_api_key = os.environ.get("OVERSEERR_API_KEY", "")
+    
+    # Setup headers with API key authorization
     headers = {
         "accept": "application/json",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
+        "X-Api-Key": overseerr_api_key  # Add API key for authentication
     }
     
     # Build the payload. In the "data" field, we include the search ID.
@@ -242,9 +246,8 @@ def search_ai():
     gemini_api_key = data.get('gemini_api_key') or os.environ.get("GEMINI_API_KEY", "")
     tmdb_api_key = data.get('tmdb_api_key') or os.environ.get("TMDB_API_KEY", "")
     
-    # Rest of the function using these keys...
     if not query or not user_id:
-        return jsonify({'error': 'Missing query or user_id'}), 400
+        return jsonify({'search_results': []}), 200  # Return empty array with 200 status
 
     recbyhistory_url = os.environ.get("RECBYHISTORY_URL", "http://recbyhistory:5335")
     ai_search_url = f"{recbyhistory_url}/ai_search"
@@ -259,13 +262,24 @@ def search_ai():
         r = requests.post(ai_search_url, json=payload, timeout=10)
         r.raise_for_status()
         response_data = r.json()
-        # Ensure search_results is a valid array
-        if 'search_results' not in response_data or not isinstance(response_data['search_results'], list):
-            return jsonify({'search_results': []})
-        return jsonify(response_data)
+        
+        # Ensure search_results is a valid array with proper fields
+        search_results = []
+        if 'search_results' in response_data and isinstance(response_data['search_results'], list):
+            for item in response_data['search_results']:
+                if isinstance(item, dict):
+                    # Ensure required fields exist
+                    clean_item = {
+                        'title': item.get('title', 'Unknown Title'),
+                        'imdb_id': item.get('imdb_id', ''),
+                        'image_url': item.get('image_url', '')
+                    }
+                    search_results.append(clean_item)
+        
+        return jsonify({'search_results': search_results})
     except Exception as e:
         print(f"Search error: {e}")
-        return jsonify({'search_results': []}), 200  # Return empty array instead of error
+        return jsonify({'search_results': []}), 200
 
 @app.route('/discovery', methods=['POST'])
 def discovery():
@@ -291,7 +305,6 @@ def discovery():
     try:
         print(f"Sending request to {disc_url}")
         r = requests.post(disc_url, json=payload, timeout=30)  # Increased timeout
-        print(f"Response status code: {r.status_code}")
         
         # Even if request fails, return fallback recommendations instead of 500 error
         if r.status_code != 200:
