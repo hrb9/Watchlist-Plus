@@ -120,7 +120,7 @@ def get_token_for_user(user_id):
     conn.close()
     return result[0] if result else None
 
-def add_discover_slider(title, search_id, slider_type=1):
+def add_discover_slider(title, search_id, slider_type=4):
     """
     Adds a new discover slider setting to Overseerr.
     """
@@ -144,9 +144,10 @@ def add_discover_slider(title, search_id, slider_type=1):
     payload = {
         "title": title,
         "type": slider_type,
-        "enabled": "true",
-        "isBuiltIn": "true", 
-        "data": str(search_id)
+        "order": '1',
+        "enabled": 'true',
+        "isBuiltIn": 'true', 
+        "data": '1',
     }
     
     try:
