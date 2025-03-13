@@ -442,7 +442,6 @@ def add_monthly_to_overseerr():
             return jsonify({'error': 'Could not convert any IMDb IDs to Overseerr IDs'}), 400
             
         # Create a slider title with user ID and date
-        import datetime
         today = datetime.datetime.now().strftime("%Y-%m-%d")
         slider_title = f"Monthly Picks for {user_id} ({today})"
         

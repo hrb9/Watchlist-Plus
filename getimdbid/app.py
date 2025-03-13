@@ -166,6 +166,7 @@ def convert_ids():
         return jsonify(result)
     except Exception as e:
         logging.error(f"Unhandled exception in convert_ids: {e}", exc_info=True)
+        # Include a fallback mechanism for title lookup if needed
         return jsonify({"error": str(e)}), 500
 
 def get_overseerr_id(title, media_type, tvdb_id=None):

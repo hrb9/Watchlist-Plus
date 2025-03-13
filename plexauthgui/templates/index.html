@@ -269,31 +269,6 @@ function addToWatchlist(imdb_id, media_type='movie') {
   })
   .catch(e => console.error(e));
 }
-
-function addMonthlyToOverseerr() {
-  if (!currentUserId) {
-    alert("Not authenticated yet!");
-    return;
-  }
-  
-  fetch('/add_monthly_to_overseerr', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ user_id: currentUserId })
-  })
-  .then(r => r.json())
-  .then(data => {
-    if (data.status === 'success') {
-      alert('Monthly recommendations added to Overseerr!');
-    } else {
-      alert('Error: ' + data.message);
-    }
-  })
-  .catch(e => {
-    console.error(e);
-    alert('Error adding recommendations to Overseerr');
-  });
-}
 </script>
 
 </body>

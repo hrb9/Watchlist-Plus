@@ -294,14 +294,16 @@ def add_request():
     
     last_id = c.lastrowid
     
-    # If auto-approval is enabled, add to Plex watchlist
+    # If auto-approval is enabled, add to Plex watchlist and request in Overseerr
     if auto_approve:
         conn.commit()  # Commit before calling external function
+        # Add this line to request media in Overseerr
+        request_media_from_overseer(data['imdb_id'], data.get('media_type', 'movie'))
         add_to_plex_watchlist(data['user_id'], data['imdb_id'])
         
     conn.commit()
     conn.close()
-    return jsonify({'status': 'success'})
+    return jsonify({'status': 'OK'})  # Changed to 'OK' to match expected response
 
 def get_plex_token(user_id):
     """Get Plex token from plexauthgui service"""
