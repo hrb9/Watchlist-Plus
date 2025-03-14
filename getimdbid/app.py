@@ -5,6 +5,12 @@ from tmdb_services import get_imdb_id as tmdb_get_imdb_id
 from imdbmovies import IMDB
 import os   
 
+logging.basicConfig(
+    level=logging.DEBUG,  # Change to DEBUG for more verbose logs
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S"
+)
+
 app = Flask(__name__)
 imdb = IMDB()
 
@@ -59,41 +65,12 @@ def get_imdb_id():
 
 @app.route('/convert_ids', methods=['POST'])
 def convert_ids():
-    """
-    Convert between different media IDs (IMDb, TMDb, TVDb) and get title and Overseerr media ID.
-    
-    Request format:
-    {
-        "imdb_id": "tt12345678",  // Optional: one of the IDs must be provided
-        "tmdb_id": 12345,         // Optional
-        "tvdb_id": 12345,         // Optional
-        "media_type": "movie"     // Required: "movie" or "tv"
-    }
-    
-    Response format:
-    {
-        "imdb_id": "tt12345678",
-        "tmdb_id": 12345,
-        "tvdb_id": 12345,
-        "title": "Movie Title",
-        "overseerr_id": 12345,
-        "media_type": "movie"
-    }
-    """
+    """Convert between different media IDs and get Overseerr ID"""
     try:
-        # Import what we need from tmdb_services with fallbacks
-        import tmdb_services
+        # Import functions from tmdb_services
+        from tmdb_services import get_tmdb_id, get_imdb_id, get_tvdb_id, get_movie_details, get_tv_details
         
-        # Check what functions are available in tmdb_services and log
-        available_functions = [f for f in dir(tmdb_services) if callable(getattr(tmdb_services, f)) and not f.startswith('_')]
-        logging.info(f"Available functions in tmdb_services: {available_functions}")
-        
-        # Get the functions we need with safe fallbacks
-        get_tmdb_id = getattr(tmdb_services, 'get_tmdb_id', lambda x: None)
-        get_imdb_id = getattr(tmdb_services, 'get_imdb_id', lambda x, y: None)
-        get_tvdb_id = getattr(tmdb_services, 'get_tvdb_id', lambda x: None)
-        get_movie_details = getattr(tmdb_services, 'get_movie_details', lambda x: {'title': None})
-        get_tv_details = getattr(tmdb_services, 'get_tv_details', lambda x: {'name': None})
+        logging.info("Starting ID conversion process")
         
         data = request.json
         logging.info(f"Request data: {data}")
@@ -101,12 +78,13 @@ def convert_ids():
         tmdb_id = data.get('tmdb_id')
         tvdb_id = data.get('tvdb_id')
         media_type = data.get('media_type', 'movie')
+        title = data.get('title')
         
         result = {
             'imdb_id': imdb_id,
             'tmdb_id': tmdb_id,
             'tvdb_id': tvdb_id,
-            'title': None,
+            'title': title,
             'overseerr_id': None,
             'media_type': media_type
         }
@@ -143,7 +121,7 @@ def convert_ids():
                     logging.info(f"Converted tmdb_id {tmdb_id} to imdb_id {imdb_id}")
                 except Exception as e:
                     logging.error(f"Error getting imdb_id from tmdb_id {tmdb_id}: {e}")
-                
+            
             # Step 4: Get TVDb ID if we don't have it yet
             if not tvdb_id and media_type == 'tv':
                 try:
@@ -156,9 +134,15 @@ def convert_ids():
         # Step 5: Look up Overseerr ID if we have a title
         if result['title']:
             try:
-                overseerr_id = get_overseerr_id(result['title'], media_type, result['tvdb_id'])
-                result['overseerr_id'] = overseerr_id
-                logging.info(f"Got overseerr_id {overseerr_id} for title '{result['title']}'")
+                # Use TMDb ID as Overseerr ID which is generally the same
+                result['overseerr_id'] = int(tmdb_id) if tmdb_id else None
+                
+                # Or, if you need to actually look it up
+                if not result['overseerr_id']:
+                    overseerr_id = get_overseerr_id(result['title'], media_type, result['tvdb_id'])
+                    result['overseerr_id'] = overseerr_id
+                
+                logging.info(f"Using overseerr_id {result['overseerr_id']} for title '{result['title']}'")
             except Exception as e:
                 logging.error(f"Error getting overseerr_id for title '{result['title']}': {e}")
         
@@ -166,7 +150,6 @@ def convert_ids():
         return jsonify(result)
     except Exception as e:
         logging.error(f"Unhandled exception in convert_ids: {e}", exc_info=True)
-        # Include a fallback mechanism for title lookup if needed
         return jsonify({"error": str(e)}), 500
 
 def get_overseerr_id(title, media_type, tvdb_id=None):
@@ -180,6 +163,7 @@ def get_overseerr_id(title, media_type, tvdb_id=None):
     overseerr_api_key = os.environ.get("OVERSEERR_API_KEY")
     
     if not overseerr_api_key or not title:
+        logging.error("Missing Overseerr API key or title")
         return None
     
     # Setup headers with the API key
@@ -194,35 +178,34 @@ def get_overseerr_id(title, media_type, tvdb_id=None):
     params = {"query": encoded_title}
     
     try:
-        search_response = requests.get(search_endpoint, params=params, headers=headers)
-        search_response.raise_for_status()
-        search_results = search_response.json().get("results", [])
+        response = requests.get(search_endpoint, params=params, headers=headers)
+        response.raise_for_status()
         
-        # Find the matching media in Overseerr
-        matched_media = None
-        for item in search_results:
-            if media_type == "tv" and tvdb_id:
-                # Compare tvdbId for TV shows
-                if item.get("tvdbId") == tvdb_id:
-                    matched_media = item
-                    break
-            else:
-                # For movies or if no tvdb_id, compare titles (case-insensitive)
-                if item.get("title", "").lower() == title.lower():
-                    matched_media = item
-                    break
-        
-        # If no exact match found, use the first result if available
-        if not matched_media and search_results:
-            matched_media = search_results[0]
-        
-        if matched_media:
-            return matched_media.get("id")
+        search_results = response.json().get("results", [])
+        if not search_results:
+            logging.warning(f"No search results found for title: {title}")
+            return None
             
+        # Find the correct result based on title and media type
+        for result in search_results:
+            if result.get("mediaType") == media_type:
+                media_title = result.get("title") if media_type == "movie" else result.get("name")
+                if media_title and media_title.lower() == title.lower():
+                    # If it's a TV show and we have a TVDB ID, verify it matches
+                    if media_type == "tv" and tvdb_id and result.get("tvdbId") and int(result.get("tvdbId")) != int(tvdb_id):
+                        continue
+                    
+                    return result.get("id")
+                
+        # If no exact match, return the first result of the correct media type
+        for result in search_results:
+            if result.get("mediaType") == media_type:
+                return result.get("id")
+                
+        return None
     except Exception as e:
-        logging.error(f"Error searching Overseerr for title '{title}': {e}")
-        
-    return None
+        logging.error(f"Error searching Overseerr for {title}: {e}")
+        return None
 
 if __name__ == '__main__':
     # Host=0.0.0.0 so that it is accessible from other containers (not just localhost).
