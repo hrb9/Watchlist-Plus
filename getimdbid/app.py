@@ -1,7 +1,7 @@
 from flask import Flask, request, jsonify
 import logging
 import requests
-from tmdb_services import get_imdb_id as tmdb_get_imdb_id
+from tmdb_services import get_tmdb_id, get_imdb_id, get_tvdb_id, get_movie_details, get_tv_details
 from imdbmovies import IMDB
 import os   
 
@@ -67,9 +67,6 @@ def get_imdb_id():
 def convert_ids():
     """Convert between different media IDs and get Overseerr ID"""
     try:
-        # Import functions from tmdb_services
-        from tmdb_services import get_tmdb_id, get_imdb_id, get_tvdb_id, get_movie_details, get_tv_details
-        
         logging.info("Starting ID conversion process")
         
         data = request.json
@@ -78,13 +75,15 @@ def convert_ids():
         tmdb_id = data.get('tmdb_id')
         tvdb_id = data.get('tvdb_id')
         media_type = data.get('media_type', 'movie')
-        title = data.get('title')
+        original_title = data.get('title')  # Store original title separately
+        
+        logging.info(f"Original title from request: {original_title}")
         
         result = {
             'imdb_id': imdb_id,
             'tmdb_id': tmdb_id,
             'tvdb_id': tvdb_id,
-            'title': title,
+            'title': original_title,  # Initialize with original title
             'overseerr_id': None,
             'media_type': media_type
         }
@@ -101,17 +100,25 @@ def convert_ids():
         # Step 2: Get details based on TMDb ID
         if tmdb_id:
             try:
+                new_title = None
                 if media_type == 'movie':
                     details = get_movie_details(tmdb_id)
                     if details:
-                        result['title'] = details.get('title')
+                        new_title = details.get('title')
                 else:
                     details = get_tv_details(tmdb_id)
                     if details:
-                        result['title'] = details.get('name')
-                logging.info(f"Got title '{result['title']}' for tmdb_id {tmdb_id}")
+                        new_title = details.get('name')
+                
+                # Only update title if we got a valid one from TMDb
+                if new_title:
+                    result['title'] = new_title
+                    logging.info(f"Updated title from TMDb: '{new_title}'")
+                else:
+                    logging.info(f"No valid title from TMDb, keeping original: '{original_title}'")
             except Exception as e:
                 logging.error(f"Error getting details for tmdb_id {tmdb_id}: {e}")
+                logging.info(f"Keeping original title: '{original_title}'")
                     
             # Step 3: Get IMDb ID if we don't have it yet
             if not imdb_id:
@@ -132,6 +139,11 @@ def convert_ids():
                     logging.error(f"Error getting tvdb_id from tmdb_id {tmdb_id}: {e}")
         
         # Step 5: Look up Overseerr ID if we have a title
+        # Make sure we have a title to use - fallback to original if current is None
+        if result['title'] is None and original_title is not None:
+            result['title'] = original_title
+            logging.info(f"Title was None, restored original title: '{original_title}'")
+        
         if result['title']:
             try:
                 # Use TMDb ID as Overseerr ID which is generally the same
@@ -145,6 +157,8 @@ def convert_ids():
                 logging.info(f"Using overseerr_id {result['overseerr_id']} for title '{result['title']}'")
             except Exception as e:
                 logging.error(f"Error getting overseerr_id for title '{result['title']}': {e}")
+        else:
+            logging.warning("No title available for Overseerr ID lookup")
         
         logging.info(f"Final result: {result}")
         return jsonify(result)
