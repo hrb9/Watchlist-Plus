@@ -424,7 +424,7 @@ def add_to_plex_watchlist(user_id, imdb_id):
             return False
         
 
-def request_media_from_overseer(imdb_id, media_type="movie"):
+def request_media_from_overseer(imdb_id, media_type="movie", title=None):
     """
     Converts an IMDb ID to media details using TMDb API, searches Overseerr by title,
     compares the tvdbId (if media_type is "tv") and sends a request to Overseerr.
@@ -434,6 +434,7 @@ def request_media_from_overseer(imdb_id, media_type="movie"):
     Args:
         imdb_id (str): The IMDb ID of the media.
         media_type (str): "movie" for movies or "tv" for TV shows (default: "movie").
+        title (str, optional): The title of the media, if known.
         
     Returns:
         dict: The JSON response from Overseerr or error details.
@@ -456,8 +457,16 @@ def request_media_from_overseer(imdb_id, media_type="movie"):
 
     # Step 1: Convert IMDb ID to all media details using the new endpoint
     try:
-        r = requests.post(f"{getimdbid_url}/convert_ids", 
-                        json={"imdb_id": imdb_id, "media_type": media_type})
+        # Include title in the request payload if available
+        payload = {
+            "imdb_id": imdb_id, 
+            "media_type": media_type
+        }
+        if title:
+            payload["title"] = title
+            logging.info(f"Including title '{title}' in convert_ids request")
+            
+        r = requests.post(f"{getimdbid_url}/convert_ids", json=payload)
         r.raise_for_status()
         media_details = r.json()
         
