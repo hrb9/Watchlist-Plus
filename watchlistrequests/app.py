@@ -145,7 +145,7 @@ def fetch_user_recommendations(user_id, recbyhistory_url):
             # If auto-approved, add to Plex watchlist
             if auto_approve:
                 conn.commit()  # Commit before calling external function
-                request_media_from_overseer(imdb_id, 'movie' if 'movie' in title.lower() else 'tv')
+                request_media_from_overseer(imdb_id, 'movie' if 'movie' in title.lower() else 'tv', title)
                 add_to_plex_watchlist(user_id, imdb_id)
                 
             logging.info(f"Added recommendation {title} ({imdb_id}) for user {user_id} with status {status}")
