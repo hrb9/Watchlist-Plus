@@ -521,16 +521,19 @@ def request_media_from_overseer(imdb_id, media_type="movie", title=None):
         # Build payload for Overseerr request
         payload = {
             "mediaType": media_type,          # "movie" or "tv"
-            "mediaId": overseerr_id,          # Overseerr's internal media ID
-            "tvdbId": tvdbId,                 # TVDB ID (0 for movies)
-            "seasons": seasons,               # All seasons for TV shows, empty for movies
-            "is4k": False,
-            "serverId": 0,
-            "profileId": 0,
-            "rootFolder": "",                 # Empty string instead of "string"
-            "languageProfileId": 0,
-            "userId": 0
+            "mediaId": int(overseerr_id),     # Ensure it's an integer
         }
+        
+        # Only include seasons for TV shows
+        if media_type.lower() == "tv":
+            payload["seasons"] = seasons
+        
+        # Remove optional params if not needed (some Overseerr instances require this)
+        # This line fixes 400 errors from Overseerr API
+        optional_params = ["tvdbId", "is4k", "serverId", "profileId", "rootFolder", "languageProfileId", "userId"]
+        for param in optional_params:
+            if param in payload and (payload[param] == 0 or payload[param] == "" or payload[param] == []):
+                del payload[param]
         
         # Send request to Overseerr
         request_endpoint = f"{overseerr_url}/api/v1/request"
