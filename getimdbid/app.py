@@ -87,18 +87,6 @@ def convert_ids():
             'overseerr_id': None,
             'media_type': media_type
         }
-        # First try: direct overseerr lookup with original title if provided
-        if original_title:
-            try:
-                logging.info(f"Trying direct Overseerr lookup for title: '{original_title}'")
-                overseerr_id = get_overseerr_id(original_title, media_type, tvdb_id)
-                if overseerr_id:
-                    result['overseerr_id'] = overseerr_id
-                    logging.info(f"Found Overseerr ID {overseerr_id} for title '{original_title}' directly")
-                    # We have what we need, return early
-                    return jsonify(result)
-            except Exception as e:
-                logging.error(f"Error in direct Overseerr lookup: {e}")
         
         # Step 1: Get TMDb ID if we don't have it yet
         if not tmdb_id and imdb_id:
@@ -109,7 +97,7 @@ def convert_ids():
             except Exception as e:
                 logging.error(f"Error getting tmdb_id from imdb_id {imdb_id}: {e}")
         
-        # Step 2: Get details based on TMDb ID
+        # Step 2: Get details based on TMDb ID to get accurate title
         if tmdb_id:
             try:
                 new_title = None
@@ -131,8 +119,8 @@ def convert_ids():
             except Exception as e:
                 logging.error(f"Error getting details for tmdb_id {tmdb_id}: {e}")
                 logging.info(f"Keeping original title: '{original_title}'")
-                    
-            # Step 3: Get IMDb ID if we don't have it yet
+            
+            # Get other IDs if needed
             if not imdb_id:
                 try:
                     imdb_id = get_imdb_id(tmdb_id, media_type)
@@ -141,7 +129,6 @@ def convert_ids():
                 except Exception as e:
                     logging.error(f"Error getting imdb_id from tmdb_id {tmdb_id}: {e}")
             
-            # Step 4: Get TVDb ID if we don't have it yet
             if not tvdb_id and media_type == 'tv':
                 try:
                     tvdb_id = get_tvdb_id(tmdb_id)
@@ -149,32 +136,22 @@ def convert_ids():
                     logging.info(f"Converted tmdb_id {tmdb_id} to tvdb_id {tvdb_id}")
                 except Exception as e:
                     logging.error(f"Error getting tvdb_id from tmdb_id {tmdb_id}: {e}")
-        
-        # Step 5: Look up Overseerr ID
-        # Make sure we have a title to use - fallback to original if current is None
-        if result['title'] is None and original_title is not None:
-            result['title'] = original_title
-            logging.info(f"Title was None, restored original title: '{original_title}'")
-        
-        if result['title']:
+            
+            # Step 3: Set Overseerr ID to TMDb ID directly
+            # This is the key change - Overseerr uses TMDb IDs as its media IDs
+            result['overseerr_id'] = int(tmdb_id)
+            logging.info(f"Set overseerr_id to TMDb ID: {tmdb_id}")
+            
+        # Step 4: If we still don't have an overseerr_id, try a direct lookup by title
+        if not result['overseerr_id'] and original_title:
             try:
-                # First try using TMDb ID as Overseerr ID
-                if tmdb_id:
-                    result['overseerr_id'] = int(tmdb_id)
-                    logging.info(f"Using TMDb ID {tmdb_id} as Overseerr ID")
-                
-                # If that's not available, or we want to verify, lookup by title
-                if not result['overseerr_id'] or not tmdb_id:
-                    overseerr_id = get_overseerr_id(result['title'], media_type, result['tvdb_id'])
-                    if overseerr_id:
-                        result['overseerr_id'] = overseerr_id
-                        logging.info(f"Found Overseerr ID {overseerr_id} by title lookup")
-                
-                logging.info(f"Final overseerr_id: {result['overseerr_id']} for title '{result['title']}'")
+                logging.info(f"No TMDb ID found, trying Overseerr lookup for title: '{original_title}'")
+                overseerr_id = get_overseerr_id(original_title, media_type, tvdb_id)
+                if overseerr_id:
+                    result['overseerr_id'] = overseerr_id
+                    logging.info(f"Found Overseerr ID {overseerr_id} for title '{original_title}'")
             except Exception as e:
-                logging.error(f"Error getting overseerr_id for title '{result['title']}': {e}")
-        else:
-            logging.warning("No title available for Overseerr ID lookup")
+                logging.error(f"Error in Overseerr title lookup: {e}")
         
         logging.info(f"Final result: {result}")
         return jsonify(result)
