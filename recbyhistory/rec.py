@@ -96,7 +96,7 @@ def get_user_taste(all_groups_history):
     )
     config = GenerateContentConfig(
         system_instruction=system_instruction,
-        temperature=1,
+        temperature=0.1,
         top_p=0.95,
         top_k=40,
         max_output_tokens=512,
@@ -185,20 +185,91 @@ def get_tmdb_poster(imdb_id):
     return None
 
 def update_recommendations_with_images(recommendations):
+    """Update recommendations with image URLs using the getimdbid service"""
     logging.info(f"Updating {len(recommendations)} recommendations with images")
+    getimdbid_url = os.environ.get("GETIMDBID_URL", "http://getimdbid:5331")
     updated = []
+    
     for i, rec in enumerate(recommendations):
         imdb_id = rec.get("imdb_id")
         title = rec.get("title", "UNKNOWN")
         logging.info(f"Finding image for recommendation #{i+1}: '{title}', IMDB_ID='{imdb_id}'")
         
-        tmdb_url = get_tmdb_poster(imdb_id)
-        if tmdb_url:
-            rec["image_url"] = tmdb_url
-            logging.info(f"Found image URL: {tmdb_url}")
-        else:
-            logging.warning(f"No image found for IMDB ID: {imdb_id}")
+        # Try using convert_ids endpoint first
+        try:
+            # First guess if it's a movie or TV show based on title or other heuristics
+            likely_media_type = "movie"  # Default to movie
+            if any(term in title.lower() for term in ["tv", "series", "show", "season"]):
+                likely_media_type = "tv"
+                
+            # Make request to convert_ids endpoint
+            payload = {
+                "imdb_id": imdb_id,
+                "title": title,
+                "media_type": likely_media_type
+            }
+            
+            response = requests.post(f"{getimdbid_url}/convert_ids", json=payload, timeout=10)
+            if response.status_code == 200:
+                result = response.json()
+                tmdb_id = result.get("tmdb_id")
+                
+                # If we got a TMDb ID, fetch the poster
+                if tmdb_id:
+                    # Construct TMDb poster URL
+                    poster_path = None
+                    # Try to use the poster info from convert_ids if available
+                    # Otherwise construct TMDB URL directly
+                    if result.get("media_type") == "tv":
+                        # TV shows
+                        tv_details = get_tv_details(tmdb_id)
+                        if tv_details and tv_details.get("poster_path"):
+                            poster_path = tv_details.get("poster_path")
+                    else:
+                        # Movies
+                        movie_details = get_movie_details(tmdb_id)
+                        if movie_details and movie_details.get("poster_path"):
+                            poster_path = movie_details.get("poster_path")
+                    
+                    if poster_path:
+                        rec["image_url"] = f"{TMDB_IMAGE_BASE_URL}{poster_path}"
+                        logging.info(f"Found image URL via convert_ids: {rec['image_url']}")
+                    else:
+                        # Fallback to direct method
+                        tmdb_url = get_tmdb_poster(imdb_id)
+                        if tmdb_url:
+                            rec["image_url"] = tmdb_url
+                            logging.info(f"Found image URL via fallback method: {tmdb_url}")
+                        else:
+                            logging.warning(f"No image found for TMDb ID: {tmdb_id}")
+                else:
+                    # Fallback to direct method
+                    tmdb_url = get_tmdb_poster(imdb_id)
+                    if tmdb_url:
+                        rec["image_url"] = tmdb_url
+                        logging.info(f"Found image URL via fallback method: {tmdb_url}")
+                    else:
+                        logging.warning(f"No TMDb ID found for IMDb ID: {imdb_id}")
+            else:
+                # Fallback to direct method if convert_ids fails
+                tmdb_url = get_tmdb_poster(imdb_id)
+                if tmdb_url:
+                    rec["image_url"] = tmdb_url
+                    logging.info(f"Found image URL via fallback method: {tmdb_url}")
+                else:
+                    logging.warning(f"convert_ids request failed with status {response.status_code}")
+        except Exception as e:
+            logging.error(f"Error using convert_ids for {title} ({imdb_id}): {e}")
+            # Fallback to direct method
+            tmdb_url = get_tmdb_poster(imdb_id)
+            if tmdb_url:
+                rec["image_url"] = tmdb_url
+                logging.info(f"Found image URL via fallback method: {tmdb_url}")
+            else:
+                logging.warning(f"Fallback lookup also failed for {imdb_id}")
+                
         updated.append(rec)
+    
     return updated
 
 def clean_json_output(text):
@@ -400,7 +471,7 @@ def get_ai_search_results(query: str, system_instruction: str):
         
     config = GenerateContentConfig(
         system_instruction=system_instruction,
-        temperature=1,
+        temperature=0.1,
         top_p=0.95,
         top_k=40,
         max_output_tokens=1024,
@@ -507,7 +578,7 @@ Please focus on quality content that matches the user's taste profile but introd
         
     config = GenerateContentConfig(
         system_instruction=system_instruction,
-        temperature=0.7,
+        temperature=0.1,
         top_p=0.95,
         top_k=40,
         max_output_tokens=8192,
