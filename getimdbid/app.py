@@ -61,6 +61,8 @@ def get_imdb_id():
     title_hash = int(''.join(str(ord(c)) for c in title.replace(' ', '_'))) % 10000000
     synthetic_id = f"tt{title_hash}1990"
     
+    logging.warning(f"Generated synthetic IMDb ID '{synthetic_id}' for title '{title}' as no real ID could be found.")
+    
     return jsonify({"imdb_id": synthetic_id})
 
 @app.route('/convert_ids', methods=['POST'])

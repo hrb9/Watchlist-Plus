@@ -14,13 +14,16 @@
       min-height: 100vh;
       display: flex;
       flex-direction: column;
+      padding-top: 20px; /* Add some padding at the top */
+      padding-bottom: 20px; /* Add some padding at the bottom */
     }
     .auth-block {
       background-color: rgba(0,0,0,0.5);
-      padding: 30px;
-      border-radius: 10px;
+      padding: 30px; /* Existing padding */
+      border-radius: 15px; /* Slightly more rounded corners */
       margin: auto;
-      width: 600px;
+      width: 90%; /* Make it responsive */
+      max-width: 650px; /* Max width for larger screens */
       text-align: center;
     }
     #searchSection, #recommendationSection {
@@ -36,41 +39,50 @@
 <body>
 
 <div class="auth-block">
-  <h2>Plex Authentication</h2>
-  <button id="authenticatePlex" class="btn btn-warning" onclick="activateScript()">Authenticate with Plex</button>
+  <h2 class="mb-4">Plex Authentication</h2>
+  <button id="authenticatePlex" class="btn btn-warning btn-lg mb-3" onclick="activateScript()">Authenticate with Plex</button>
   <div id="statusArea" class="mt-3"></div>
 
   <!-- API Keys Section - Add after authentication -->
   <div id="apiKeysSection" class="mt-4" style="display: none;">
-    <h4>API Keys</h4>
-    <div class="mb-3">
+    <h4 class="mb-3">API Keys</h4>
+    <div class="mb-3 text-start">
       <label for="geminiApiKey" class="form-label">Gemini API Key</label>
       <input type="password" class="form-control" id="geminiApiKey" placeholder="Enter your Gemini API key">
     </div>
-    <div class="mb-3">
+    <div class="mb-3 text-start">
       <label for="tmdbApiKey" class="form-label">TMDB API Key</label>
       <input type="password" class="form-control" id="tmdbApiKey" placeholder="Enter your TMDB API key">
     </div>
-    <button onclick="saveApiKeys()" class="btn btn-primary">Save Keys</button>
+    <button onclick="saveApiKeys()" class="btn btn-primary w-100">Save Keys</button>
   </div>
 
   <!-- חלק שמוצג רק אחרי התחברות -->
   <div id="searchSection" class="mt-4">
-    <h3>AI Search</h3>
-    <input type="text" id="searchQuery" class="form-control" placeholder="Enter search query">
-    <button class="btn btn-primary mt-2" onclick="performSearch()">Search</button>
+    <h3 class="text-center mb-3">AI Search</h3>
+    <input type="text" id="searchQuery" class="form-control mb-2" placeholder="Enter search query">
+    <button class="btn btn-primary mt-2 mb-3 w-100" onclick="performSearch()">Search</button>
+    <div id="searchSpinner" class="spinner-border text-light mx-auto d-block" role="status" style="display: none;">
+      <span class="visually-hidden">Loading...</span>
+    </div>
     <div id="searchResults" class="mt-3"></div>
   </div>
 
   <div id="recommendationSection" class="mt-4">
-    <h3>Discovery Recommendations</h3>
-    <button class="btn btn-success" onclick="fetchDiscovery()">Get Discovery</button>
+    <h3 class="text-center mb-3">Discovery Recommendations</h3>
+    <button class="btn btn-success mb-3 w-100" onclick="fetchDiscovery()">Get Discovery</button>
+    <div id="discoverySpinner" class="spinner-border text-light mx-auto d-block" role="status" style="display: none;">
+      <span class="visually-hidden">Loading...</span>
+    </div>
     <div id="discoveryContainer" class="mt-3"></div>
 
-    <hr class="text-light">
+    <hr class="text-light my-4">
 
-    <h3>Monthly Recommendations</h3>
-    <button class="btn btn-info" onclick="fetchMonthly()">Get Monthly Recs</button>
+    <h3 class="text-center mb-3">Monthly Recommendations</h3>
+    <button class="btn btn-info mb-3 w-100" onclick="fetchMonthly()">Get Monthly Recs</button>
+    <div id="monthlySpinner" class="spinner-border text-light mx-auto d-block" role="status" style="display: none;">
+      <span class="visually-hidden">Loading...</span>
+    </div>
     <div id="monthlyContainer" class="mt-3"></div>
   </div>
 </div>
@@ -139,6 +151,11 @@ function performSearch() {
   }
   
   const keys = getApiKeys();
+  const resultsContainer = document.getElementById('searchResults');
+  const spinner = document.getElementById('searchSpinner');
+
+  resultsContainer.innerHTML = ''; // Clear previous results
+  spinner.style.display = 'block';
   
   fetch('/search_ai', {
     method: 'POST',
@@ -152,17 +169,30 @@ function performSearch() {
   })
   .then(r => r.json())
   .then(data => {
-    if (data.search_results) {
+    if (data.search_results && data.search_results.length > 0) {
       displayCarousel(data.search_results, 'searchResults');
+    } else if (data.error) {
+      resultsContainer.innerHTML = `<p class="text-danger">Error: ${data.error}</p>`;
     } else {
-      document.getElementById('searchResults').innerHTML = '<p>No results</p>';
+      resultsContainer.innerHTML = '<p>No results found.</p>';
     }
   })
-  .catch(e => console.error(e));
+  .catch(e => {
+    console.error(e);
+    resultsContainer.innerHTML = '<p class="text-danger">Error fetching search results. Please try again later.</p>';
+  })
+  .finally(() => {
+    spinner.style.display = 'none';
+  });
 }
 
 function fetchDiscovery() {
   const keys = getApiKeys();
+  const resultsContainer = document.getElementById('discoveryContainer');
+  const spinner = document.getElementById('discoverySpinner');
+
+  resultsContainer.innerHTML = ''; // Clear previous results
+  spinner.style.display = 'block';
   
   fetch('/discovery', {
     method: 'POST',
@@ -175,42 +205,65 @@ function fetchDiscovery() {
   })
   .then(r => r.json())
   .then(data => {
-    if (data.discovery_recommendations) {
+    if (data.discovery_recommendations && data.discovery_recommendations.length > 0) {
       displayCarousel(data.discovery_recommendations, 'discoveryContainer');
+    } else if (data.error) {
+      resultsContainer.innerHTML = `<p class="text-danger">Error: ${data.error}</p>`;
     } else {
-      document.getElementById('discoveryContainer').innerHTML = '<p>No discovery results</p>';
+      resultsContainer.innerHTML = '<p>No discovery recommendations found.</p>';
     }
   })
-  .catch(e => console.error(e));
+  .catch(e => {
+    console.error(e);
+    resultsContainer.innerHTML = '<p class="text-danger">Error fetching discovery recommendations. Please try again later.</p>';
+  })
+  .finally(() => {
+    spinner.style.display = 'none';
+  });
 }
 
 function fetchMonthly() {
   const keys = getApiKeys();
+  const resultsContainer = document.getElementById('monthlyContainer');
+  const spinner = document.getElementById('monthlySpinner');
+
+  resultsContainer.innerHTML = ''; // Clear previous results
+  spinner.style.display = 'block';
   
   fetch(`/monthly_recs?user_id=${currentUserId}&gemini_api_key=${keys.gemini}&tmdb_api_key=${keys.tmdb}`)
   .then(r => r.json())
   .then(data => {
-    if (data.monthly_recommendations) {
+    if (data.monthly_recommendations && data.monthly_recommendations.length > 0) {
       displayCarousel(data.monthly_recommendations, 'monthlyContainer');
+    } else if (data.error) {
+      resultsContainer.innerHTML = `<p class="text-danger">Error: ${data.error}</p>`;
     } else {
-      document.getElementById('monthlyContainer').innerHTML = '<p>No monthly results</p>';
+      resultsContainer.innerHTML = '<p>No monthly recommendations found.</p>';
     }
   })
-  .catch(e => console.error(e));
+  .catch(e => {
+    console.error(e);
+    resultsContainer.innerHTML = '<p class="text-danger">Error fetching monthly recommendations. Please try again later.</p>';
+  })
+  .finally(() => {
+    spinner.style.display = 'none';
+  });
 }
 
 function displayCarousel(itemsArray, containerId) {
+  const container = document.getElementById(containerId);
   // בונים Carousel אחד
   if (!Array.isArray(itemsArray)) {
-    document.getElementById(containerId).innerHTML = "<p>Invalid array format</p>";
+    // Error already handled by caller, or should be.
+    // container.innerHTML = "<p class='text-warning'>Invalid array format for carousel.</p>";
     return;
   }
   if (itemsArray.length === 0) {
-    document.getElementById(containerId).innerHTML = "<p>No items found</p>";
+    // This case should be handled by the calling function (e.g., "No results found")
+    // container.innerHTML = "<p>No items to display in carousel.</p>";
     return;
   }
 
-  const container = document.getElementById(containerId);
   const cId = 'carousel-' + containerId + '-' + Math.floor(Math.random()*10000);
   let html = `
     <div id="${cId}" class="carousel slide" data-bs-ride="carousel">

@@ -40,30 +40,6 @@ def init_db():
     conn.commit()
     conn.close()
 
-    conn = sqlite3.connect('watchlist_requests.db')
-    c = conn.cursor()
-    c.execute('''
-    CREATE TABLE IF NOT EXISTS requests (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        imdb_id TEXT NOT NULL,
-        title TEXT NOT NULL,
-        image_url TEXT,
-        user_id TEXT NOT NULL,
-        status TEXT DEFAULT 'pending',
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        approved_at TIMESTAMP,
-        approved_by TEXT
-    )''')
-    
-    # Set default value for enabled to 1 (true) to enable auto-approval by default
-    c.execute('''
-    CREATE TABLE IF NOT EXISTS auto_approvals (
-        user_id TEXT PRIMARY KEY,
-        enabled BOOLEAN DEFAULT 1
-    )''')
-    conn.commit()
-    conn.close()
-
 init_db()  # Initialize the database
 
 def store_token_usage(token, user_id, is_admin=False):
@@ -120,47 +96,90 @@ def get_token_for_user(user_id):
     conn.close()
     return result[0] if result else None
 
-def add_discover_slider(title, search_id, slider_type=4):
+def add_discover_slider(title, imdb_ids_str, slider_type=4): # imdb_ids_str is comma-separated
     """
-    Adds a new discover slider setting to Overseerr.
+    Adds a new discover slider setting to Overseerr using TMDB IDs converted from IMDb IDs.
     """
     overseerr_url = os.environ.get("OVERSEERR_URL", "http://localhost:5055")
-    endpoint = f"{overseerr_url}/api/v1/settings/discover/add"
-    
-    # Get API key from environment
-    overseerr_api_key = os.environ.get("OVERSEERR_API_KEY", "")
-    
+    overseerr_api_key = os.environ.get("OVERSEERR_API_KEY")
+    getimdbid_url = os.environ.get("GETIMDBID_URL", "http://getimdbid:5331")
+
     if not overseerr_api_key:
-        return {"error": "No Overseerr API key found in environment variables"}
+        app.logger.error("add_discover_slider: OVERSEERR_API_KEY not found in environment variables.")
+        return {"error": "No Overseerr API key found"}
+    if not getimdbid_url:
+        app.logger.error("add_discover_slider: GETIMDBID_URL not configured.")
+        return {"error": "GETIMDBID service URL not configured."}
+
+    imdb_id_list = [id.strip() for id in imdb_ids_str.split(',') if id.strip()]
+    if not imdb_id_list:
+        app.logger.warning("add_discover_slider: No IMDb IDs provided to create slider.")
+        return {"error": "No IMDb IDs provided for the slider."}
+        
+    tmdb_ids = []
+    app.logger.info(f"add_discover_slider: Attempting to convert IMDb IDs: {imdb_id_list} to TMDB IDs for slider '{title}'.")
+
+    for imdb_id in imdb_id_list:
+        try:
+            # Assuming movies for sliders, adjust media_type if necessary.
+            # For this task, "movie" is assumed.
+            payload = {"imdb_id": imdb_id, "media_type": "movie"} 
+            convert_response = requests.post(
+                f"{getimdbid_url}/convert_ids",
+                json=payload,
+                timeout=10
+            )
+            convert_response.raise_for_status()
+            result = convert_response.json()
+            if result.get("tmdb_id"):
+                tmdb_ids.append(str(result["tmdb_id"]))
+                app.logger.info(f"add_discover_slider: Converted IMDb ID {imdb_id} to TMDB ID {result['tmdb_id']}.")
+            else:
+                app.logger.warning(f"add_discover_slider: Could not convert IMDb ID {imdb_id} to TMDB ID. Response: {result}")
+        except requests.exceptions.RequestException as e:
+            app.logger.error(f"add_discover_slider: RequestException converting IMDb ID {imdb_id} to TMDB ID: {e}")
+        except Exception as e:
+            app.logger.error(f"add_discover_slider: Unexpected error converting IMDb ID {imdb_id} to TMDB ID: {e}")
     
-    # Setup headers with API key authorization
+    if not tmdb_ids:
+        app.logger.error(f"add_discover_slider: No TMDB IDs could be obtained from IMDb IDs: {imdb_ids_str} for slider '{title}'.")
+        return {"error": "Could not convert any IMDb IDs to TMDB IDs for the slider."}
+
+    # Setup headers for Overseerr
     headers = {
         "accept": "application/json",
         "Content-Type": "application/json",
         "X-Api-Key": overseerr_api_key
     }
-    
-    # Build the payload with Overseerr media IDs in the data field
-    payload = {
+
+    # Build the payload for Overseerr with TMDB IDs in the data field
+    # For custom sliders from a list of IDs, isBuiltIn should be false.
+    # Type 4 is "TMDB Movie Recommendations", which seems suitable if we are passing TMDB movie IDs.
+    # The caller (add_monthly_to_overseerr) passes slider_type=1 ("Upcoming Movies"), 
+    # which might not be ideal for a custom list of TMDB IDs. 
+    # However, changing the caller's choice of slider_type is outside this function's direct responsibility.
+    # This function will use the slider_type provided by the caller.
+    overseerr_payload = {
         "title": title,
-        "type": slider_type,
-        "order": '1',
-        "enabled": 'true',
-        "isBuiltIn": 'true', 
-        "data": '1',
+        "type": slider_type, 
+        "order": 1, # Default order to 1, can be made configurable
+        "enabled": True, 
+        "isBuiltIn": False, # Custom sliders are not built-in
+        "data": ",".join(tmdb_ids), # Comma-separated TMDB IDs
     }
     
+    endpoint = f"{overseerr_url}/api/v1/settings/discover/add"
     try:
-        print(f"Sending request to Overseerr: {endpoint}")
-        print(f"Payload: {payload}")
-        response = requests.post(endpoint, json=payload, headers=headers)
-        print(f"Response status: {response.status_code}")
-        print(f"Response body: {response.text}")
+        app.logger.info(f"add_discover_slider: Sending request to Overseerr: {endpoint} with payload: {overseerr_payload}")
+        response = requests.post(endpoint, json=overseerr_payload, headers=headers)
         response.raise_for_status()
-        logging.info(f"Successfully added discover slider: {title}")
+        app.logger.info(f"add_discover_slider: Successfully added discover slider: {title} with TMDB IDs: {tmdb_ids}")
         return response.json()
+    except requests.exceptions.RequestException as e:
+        app.logger.error(f"add_discover_slider: RequestException adding discover slider '{title}' to Overseerr: {e}. Response: {e.response.text if e.response else 'No response'}")
+        return {"error": f"Overseerr API error: {e}"}
     except Exception as e:
-        logging.error(f"Error adding discover slider: {e}")
+        app.logger.error(f"add_discover_slider: Unexpected error adding discover slider '{title}' to Overseerr: {e}")
         return {"error": str(e)}
 
 # === Routes for PIN auth ===
@@ -239,24 +258,46 @@ def search_ai():
     data = request.json
     query = data.get('query')
     user_id = data.get('user_id')
-    # Get keys from request or fall back to environment variables
-    gemini_api_key = data.get('gemini_api_key') or os.environ.get("GEMINI_API_KEY", "")
-    tmdb_api_key = data.get('tmdb_api_key') or os.environ.get("TMDB_API_KEY", "")
+
+    gemini_api_key_env = os.environ.get("GEMINI_API_KEY")
+    tmdb_api_key_env = os.environ.get("TMDB_API_KEY")
+
+    gemini_api_key_req = data.get('gemini_api_key')
+    tmdb_api_key_req = data.get('tmdb_api_key')
+
+    final_gemini_key = gemini_api_key_env if gemini_api_key_env else gemini_api_key_req
+    final_tmdb_key = tmdb_api_key_env if tmdb_api_key_env else tmdb_api_key_req
     
+    if final_gemini_key and final_tmdb_key:
+        key_source_log = "environment variables" if gemini_api_key_env and tmdb_api_key_env \
+            else ("client request" if gemini_api_key_req and tmdb_api_key_req else "mixed sources or missing")
+        # More precise logging for which specific keys came from where
+        gemini_source = "environment" if gemini_api_key_env else "client request"
+        tmdb_source = "environment" if tmdb_api_key_env else "client request"
+        app.logger.info(f"Using Gemini API key from {gemini_source} and TMDB API key from {tmdb_source} for AI search.")
+    else:
+        app.logger.warning("One or both API keys are missing after checking environment and request.")
+
     if not query or not user_id:
-        return jsonify({'search_results': []}), 200  # Return empty array with 200 status
+        app.logger.warning("AI Search: Query or user_id missing from request.")
+        return jsonify({'search_results': []}), 200
+
+    if not final_gemini_key or not final_tmdb_key:
+        app.logger.error("AI Search: API keys for Gemini or TMDB are missing from both environment and request.")
+        return jsonify({'error': 'API keys are not configured correctly. Please check server logs or provide them in the UI.', 'search_results': []}), 500
 
     recbyhistory_url = os.environ.get("RECBYHISTORY_URL", "http://recbyhistory:5335")
     ai_search_url = f"{recbyhistory_url}/ai_search"
 
     payload = {
         'user_id': user_id,
-        'gemini_api_key': gemini_api_key,
-        'tmdb_api_key': tmdb_api_key,
+        'gemini_api_key': final_gemini_key,
+        'tmdb_api_key': final_tmdb_key,
         'query': query
     }
     try:
-        r = requests.post(ai_search_url, json=payload, timeout=10)
+        app.logger.info(f"Sending AI search request for user {user_id} to {ai_search_url}")
+        r = requests.post(ai_search_url, json=payload, timeout=15) # Increased timeout slightly
         r.raise_for_status()
         response_data = r.json()
         
@@ -274,65 +315,103 @@ def search_ai():
                     search_results.append(clean_item)
         
         return jsonify({'search_results': search_results})
+    except requests.exceptions.Timeout:
+        app.logger.error(f"AI Search: Timeout when calling {ai_search_url} for user {user_id}.")
+        return jsonify({'error': 'AI search request timed out.', 'search_results': []}), 504 # Gateway Timeout
+    except requests.exceptions.RequestException as e:
+        app.logger.error(f"AI Search: Error calling {ai_search_url} for user {user_id}: {e}")
+        return jsonify({'error': f'Failed to connect to recommendation service: {e}', 'search_results': []}), 502 # Bad Gateway
     except Exception as e:
-        print(f"Search error: {e}")
-        return jsonify({'search_results': []}), 200
+        app.logger.error(f"AI Search: Unexpected error for user {user_id}: {e}")
+        return jsonify({'error': 'An unexpected error occurred during AI search.', 'search_results': []}), 500
 
 @app.route('/discovery', methods=['POST'])
 def discovery():
     """Calls recbyhistory's /discovery_recommendations."""
     data = request.json
     user_id = data.get('user_id')
-    num_movies = data.get('num_movies', 3)
+    num_movies = data.get('num_movies', 3) # Default values
     num_series = data.get('num_series', 2)
     extra = data.get('extra_elements', '')
 
-    print(f"Discovery request for user {user_id}")
+    gemini_api_key_env = os.environ.get("GEMINI_API_KEY")
+    tmdb_api_key_env = os.environ.get("TMDB_API_KEY")
+
+    # Client-provided keys (though not typically sent for discovery from current UI)
+    gemini_api_key_req = data.get('gemini_api_key') 
+    tmdb_api_key_req = data.get('tmdb_api_key')
+
+    final_gemini_key = gemini_api_key_env if gemini_api_key_env else gemini_api_key_req
+    final_tmdb_key = tmdb_api_key_env if tmdb_api_key_env else tmdb_api_key_req
+
+    if final_gemini_key and final_tmdb_key:
+        gemini_source = "environment" if gemini_api_key_env else "client request"
+        tmdb_source = "environment" if tmdb_api_key_env else "client request"
+        app.logger.info(f"Using Gemini API key from {gemini_source} and TMDB API key from {tmdb_source} for Discovery.")
+    else:
+        app.logger.warning("Discovery: One or both API keys are missing after checking environment and request.")
+
+    if not user_id:
+        app.logger.warning("Discovery: user_id missing from request.")
+        # Fallback recommendations defined below will be used.
+    
+    if not final_gemini_key or not final_tmdb_key:
+        app.logger.error("Discovery: API keys for Gemini or TMDB are missing. Using fallback recommendations.")
+        # Fallback recommendations will be returned by the generic error handler or specific logic below.
+        # No need to return 500 here as discovery has fallbacks.
+
     recbyhistory_url = os.environ.get("RECBYHISTORY_URL", "http://recbyhistory:5335")
     disc_url = f"{recbyhistory_url}/discovery_recommendations"
 
     payload = {
         'user_id': user_id,
-        'gemini_api_key': os.environ.get("GEMINI_API_KEY", ""),
-        'tmdb_api_key': os.environ.get("TMDB_API_KEY", ""),
+        'gemini_api_key': final_gemini_key, # Will be None if not found, recbyhistory should handle
+        'tmdb_api_key': final_tmdb_key,     # Will be None if not found
         'num_movies': num_movies,
         'num_series': num_series,
         'extra_elements': extra
     }
+    
+    # Fallback data in case of any error or missing keys
+    fallback_recommendations = {
+        'discovery_recommendations': [
+            {"title": "The Shawshank Redemption", "imdb_id": "tt0111161", 
+             "image_url": "https://image.tmdb.org/t/p/w500/q6y0Go1tsGEsmtFryDOJo3dEmqu.jpg"},
+            {"title": "The Godfather", "imdb_id": "tt0068646", 
+             "image_url": "https://image.tmdb.org/t/p/w500/3bhkrj58Vtu7enYsRolD1fZdja1.jpg"},
+            {"title": "Breaking Bad", "imdb_id": "tt0903747", 
+             "image_url": "https://image.tmdb.org/t/p/w500/ggFHVNu6YYI5L9pCfOacjizRGt.jpg"}
+        ]
+    }
+
+    # If keys are absolutely necessary and missing, return fallback immediately
+    if not final_gemini_key or not final_tmdb_key:
+        app.logger.warning("Discovery: Returning fallback recommendations due to missing API keys.")
+        return jsonify(fallback_recommendations)
+
     try:
-        print(f"Sending request to {disc_url}")
-        r = requests.post(disc_url, json=payload, timeout=30)  # Increased timeout
+        app.logger.info(f"Sending Discovery request for user {user_id} to {disc_url}")
+        r = requests.post(disc_url, json=payload, timeout=30)
         
-        # Even if request fails, return fallback recommendations instead of 500 error
         if r.status_code != 200:
-            print(f"Error from recbyhistory: {r.text}")
-            return jsonify({
-                'discovery_recommendations': [
-                    {"title": "The Shawshank Redemption", "imdb_id": "tt0111161", 
-                     "image_url": "https://image.tmdb.org/t/p/w500/q6y0Go1tsGEsmtFryDOJo3dEmqu.jpg"},
-                    {"title": "The Godfather", "imdb_id": "tt0068646", 
-                     "image_url": "https://image.tmdb.org/t/p/w500/3bhkrj58Vtu7enYsRolD1fZdja1.jpg"},
-                    {"title": "Breaking Bad", "imdb_id": "tt0903747", 
-                     "image_url": "https://image.tmdb.org/t/p/w500/ggFHVNu6YYI5L9pCfOacjizRGt.jpg"}
-                ]
-            })
+            app.logger.error(f"Discovery: Error from recbyhistory service (status {r.status_code}): {r.text}")
+            return jsonify(fallback_recommendations)
             
         response_data = r.json()
-        print(f"Discovery response keys: {list(response_data.keys())}")
+        app.logger.info(f"Discovery: Successfully received recommendations for user {user_id}.")
+        # Ensure the key in the response is 'discovery_recommendations'
+        if 'recommendations' in response_data and 'discovery_recommendations' not in response_data:
+             response_data['discovery_recommendations'] = response_data.pop('recommendations')
         return jsonify(response_data)
+    except requests.exceptions.Timeout:
+        app.logger.error(f"Discovery: Timeout when calling {disc_url} for user {user_id}. Returning fallback.")
+        return jsonify(fallback_recommendations)
+    except requests.exceptions.RequestException as e:
+        app.logger.error(f"Discovery: Error calling {disc_url} for user {user_id}: {e}. Returning fallback.")
+        return jsonify(fallback_recommendations)
     except Exception as e:
-        print(f"Error in discovery endpoint: {e}")
-        # Return fallbacks instead of error
-        return jsonify({
-            'discovery_recommendations': [
-                {"title": "The Shawshank Redemption", "imdb_id": "tt0111161", 
-                 "image_url": "https://image.tmdb.org/t/p/w500/q6y0Go1tsGEsmtFryDOJo3dEmqu.jpg"},
-                {"title": "Pulp Fiction", "imdb_id": "tt0110912", 
-                 "image_url": "https://image.tmdb.org/t/p/w500/d5iIlFn5s0ImszYzBPb8JPIfbXD.jpg"},
-                {"title": "Stranger Things", "imdb_id": "tt4574334", 
-                 "image_url": "https://image.tmdb.org/t/p/w500/49WJfeN0moxb9IPfGn8AIqMGskD.jpg"}
-            ]
-        })
+        app.logger.error(f"Discovery: Unexpected error for user {user_id}: {e}. Returning fallback.")
+        return jsonify(fallback_recommendations)
 
 @app.route('/monthly_recs', methods=['GET'])
 def monthly_recs():
@@ -345,7 +424,7 @@ def monthly_recs():
         
         # Even if request fails, return fallback recommendations instead of 500 error
         if r.status_code != 200:
-            print(f"Error from monthly_recommendations: {r.text}")
+            app.logger.error(f"Monthly Recs: Error from recbyhistory service (status {r.status_code}): {r.text}")
             return jsonify({
                 'user_id': user_id,
                 'monthly_recommendations': [
@@ -358,10 +437,37 @@ def monthly_recs():
                 ]
             })
             
+        app.logger.info(f"Monthly Recs: Successfully received recommendations for user {user_id}.")
         return jsonify(r.json())
-    except Exception as e:
-        print(f"Error in monthly_recs endpoint: {e}")
+    except requests.exceptions.Timeout:
+        app.logger.error(f"Monthly Recs: Timeout when calling {monthly_url} for user {user_id}. Returning fallback.")
         # Return fallbacks instead of error
+        return jsonify({
+            'user_id': user_id,
+            'monthly_recommendations': [
+                {"id": 1, "group_id": "all", "title": "Fight Club", 
+                 "imdb_id": "tt0137523", "image_url": "https://image.tmdb.org/t/p/w500/pB8BM7pdSp6B6Ih7QZ4DrQ3PmJK.jpg", 
+                 "created_at": datetime.now().isoformat()},
+                {"id": 2, "group_id": "all", "title": "The Dark Knight", 
+                 "imdb_id": "tt0468569", "image_url": "https://image.tmdb.org/t/p/w500/qJ2tW6WMUDux911r6m7haRef0WH.jpg", 
+                 "created_at": datetime.now().isoformat()}
+            ]
+        })
+    except requests.exceptions.RequestException as e:
+        app.logger.error(f"Monthly Recs: Error calling {monthly_url} for user {user_id}: {e}. Returning fallback.")
+        return jsonify({
+            'user_id': user_id,
+            'monthly_recommendations': [
+                {"id": 1, "group_id": "all", "title": "Fight Club", 
+                 "imdb_id": "tt0137523", "image_url": "https://image.tmdb.org/t/p/w500/pB8BM7pdSp6B6Ih7QZ4DrQ3PmJK.jpg", 
+                 "created_at": datetime.now().isoformat()},
+                {"id": 2, "group_id": "all", "title": "The Dark Knight", 
+                 "imdb_id": "tt0468569", "image_url": "https://image.tmdb.org/t/p/w500/qJ2tW6WMUDux911r6m7haRef0WH.jpg", 
+                 "created_at": datetime.now().isoformat()}
+            ]
+        })
+    except Exception as e:
+        app.logger.error(f"Monthly Recs: Unexpected error for user {user_id}: {e}. Returning fallback.")
         return jsonify({
             'user_id': user_id,
             'monthly_recommendations': [
@@ -380,10 +486,18 @@ def add_to_watchlist_gui():
     data = request.json
     watchlist_url = os.environ.get("WATCHLIST_URL", "http://watchlistrequests:5333")
     try:
+        app.logger.info(f"Forwarding watchlist request for user {data.get('user_id')} to {watchlist_url}")
         r = requests.post(f"{watchlist_url}/api/request", json=data, timeout=10)
         r.raise_for_status()
         return jsonify(r.json())
+    except requests.exceptions.Timeout:
+        app.logger.error(f"Add to Watchlist GUI: Timeout when calling {watchlist_url}.")
+        return jsonify({'error': 'Request to watchlist service timed out.'}), 504
+    except requests.exceptions.RequestException as e:
+        app.logger.error(f"Add to Watchlist GUI: Error calling {watchlist_url}: {e}")
+        return jsonify({'error': f'Failed to connect to watchlist service: {e}'}), 502
     except Exception as e:
+        app.logger.error(f"Add to Watchlist GUI: Unexpected error: {e}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/add_monthly_to_overseerr', methods=['POST'])
@@ -413,6 +527,7 @@ def add_monthly_to_overseerr():
             title = rec.get('title')
             
             if not imdb_id or not title:
+                app.logger.warning(f"Add Monthly to Overseerr: Skipping recommendation with missing imdb_id or title: {rec}")
                 continue
                 
             # Call convert_ids API to get Overseerr ID
@@ -422,7 +537,7 @@ def add_monthly_to_overseerr():
                     "media_type": "movie",  # Default to movie, you might want to detect this
                     "title": title
                 }
-                
+                app.logger.info(f"Add Monthly to Overseerr: Converting IMDb ID {imdb_id} for title '{title}' using {getimdbid_url}")
                 convert_response = requests.post(
                     f"{getimdbid_url}/convert_ids", 
                     json=payload, 
@@ -434,29 +549,47 @@ def add_monthly_to_overseerr():
                     overseerr_id = result.get('overseerr_id')
                     if overseerr_id:
                         overseerr_ids.append(str(overseerr_id))
-                        print(f"Converted {imdb_id} ({title}) to Overseerr ID: {overseerr_id}")
+                        app.logger.info(f"Add Monthly to Overseerr: Converted {imdb_id} ({title}) to Overseerr ID: {overseerr_id}")
+                    else:
+                        app.logger.warning(f"Add Monthly to Overseerr: No Overseerr ID found for {imdb_id} ({title}) in convert_ids response.")
+                else:
+                    app.logger.error(f"Add Monthly to Overseerr: Failed to convert {imdb_id} ({title}). Status: {convert_response.status_code}, Response: {convert_response.text}")
             except Exception as e:
-                print(f"Error converting ID for {title}: {e}")
+                app.logger.error(f"Add Monthly to Overseerr: Error converting ID for {title} ({imdb_id}): {e}")
         
         if not overseerr_ids:
+            app.logger.error("Add Monthly to Overseerr: Could not convert any IMDb IDs to Overseerr IDs for user {user_id}.")
             return jsonify({'error': 'Could not convert any IMDb IDs to Overseerr IDs'}), 400
             
         # Create a slider title with user ID and date
-        today = datetime.datetime.now().strftime("%Y-%m-%d")
+        today = datetime.now().strftime("%Y-%m-%d")
         slider_title = f"Monthly Picks for {user_id} ({today})"
         
         # Format for Overseerr - extract IMDb IDs
         imdb_ids = [rec.get('imdb_id') for rec in recommendations if rec.get('imdb_id')]
         # Call add_discover_slider with comma-separated IMDb IDs
-        result = add_discover_slider(slider_title, ",".join(imdb_ids), 1)
+        result = add_discover_slider(slider_title, ",".join(imdb_ids), 1) # type 1 is 'IMDb List'
         
+        if 'error' not in result:
+            app.logger.info(f"Add Monthly to Overseerr: Successfully added slider '{slider_title}' for user {user_id}.")
+            status_msg = 'success'
+            message = 'Added recommendations to Overseerr discover sliders.'
+        else:
+            app.logger.error(f"Add Monthly to Overseerr: Failed to add slider '{slider_title}' for user {user_id}. Error: {result.get('error')}")
+            status_msg = 'error'
+            message = result.get('error', 'Failed to add slider to Overseerr.')
+
         return jsonify({
-            'status': 'success' if 'error' not in result else 'error',
-            'message': 'Added recommendations to Overseerr' if 'error' not in result else result.get('error'),
+            'status': status_msg,
+            'message': message,
             'details': result,
-            'converted_ids': overseerr_ids
+            'converted_ids': overseerr_ids 
         })
+    except requests.exceptions.RequestException as e:
+        app.logger.error(f"Add Monthly to Overseerr: RequestException for user {user_id}: {e}")
+        return jsonify({'error': f'Failed to connect to dependent service: {e}'}), 502
     except Exception as e:
+        app.logger.error(f"Add Monthly to Overseerr: Unexpected error for user {user_id}: {e}")
         return jsonify({'error': str(e)}), 500
 
 # === API endpoint from File 1 (still useful for other clients) ===
@@ -468,8 +601,10 @@ def list_users():
     """
     try:
         users = get_all_users()
+        app.logger.info(f"Listing all users: {len(users)} found.")
         return jsonify({'users': users})
     except Exception as e:
+        app.logger.error(f"Error listing users: {e}")
         return jsonify({'error': str(e)}), 500
 
 # === API endpoint from file 1 ( /connect )
@@ -492,18 +627,20 @@ def connect():
 
         token = get_token_for_user(user_id)
         if not token:
+            app.logger.warning(f"Connect: Token not found for user_id: {user_id}")
             return jsonify({'error': 'Token not found for user'}), 404
 
         if connection_type == 'account':
             # Get admin status from database
             conn = sqlite3.connect(get_db_path())
             c = conn.cursor()
-            c.execute('SELECT is_admin FROM auth_tokens WHERE user_id = ?', (user_id,))
+            c.execute('SELECT is_admin FROM auth_tokens WHERE user_id = ? AND token = ?', (user_id, token)) # Ensure token matches user
             row = c.fetchone()
             is_admin = bool(row and row[0])
             conn.close()
             
             # using plexapi to retrieve some account info if needed
+            app.logger.info(f"Connect: Account details requested for user_id: {user_id}. Admin status: {is_admin}")
             account = MyPlexAccount(token=token)
             return jsonify({
                 'token': token,
@@ -514,13 +651,19 @@ def connect():
                 }
             })
         else:
+            app.logger.warning(f"Connect: Invalid connection type '{connection_type}' for user_id: {user_id}")
             return jsonify({'error': 'Invalid connection type'}), 400
 
     except Exception as e:
+        app.logger.error(f"Connect: Error for user_id {user_id} with type {connection_type}: {e}")
         return jsonify({'error': str(e)}), 500
    
 
 if __name__ == '__main__':
+    # Configure basic logging for the app if not already configured
+    if not app.debug: # Don't setup logging when debug is true, Flask does it.
+        logging.basicConfig(level=logging.INFO,
+                            format='%(asctime)s %(levelname)s %(name)s %(threadName)s : %(message)s')
     # Default port 5332
     app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5332)), debug=True)
     #auth
