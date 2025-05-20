@@ -261,13 +261,23 @@ def dashboard():
 
 @app.route('/api/requests', methods=['GET'])
 def get_requests():
+    user_id_filter = request.args.get('user_id') # Get user_id from query params
     conn = sqlite3.connect('watchlist_requests.db')
     c = conn.cursor()
-    c.execute('SELECT * FROM requests ORDER BY created_at DESC')
-    requests = [dict(zip(['id', 'imdb_id', 'title', 'image_url', 'user_id', 'status', 'created_at', 'approved_at', 'approved_by'], row)) 
+    
+    query = 'SELECT * FROM requests'
+    params = []
+    if user_id_filter:
+        query += ' WHERE user_id = ?'
+        params.append(user_id_filter)
+    query += ' ORDER BY created_at DESC'
+    
+    c.execute(query, params)
+    
+    requests_data = [dict(zip(['id', 'imdb_id', 'title', 'image_url', 'user_id', 'status', 'created_at', 'approved_at', 'approved_by'], row)) 
                 for row in c.fetchall()]
     conn.close()
-    return jsonify(requests)
+    return jsonify(requests_data)
 
 @app.route('/api/request', methods=['POST'])
 def add_request():
@@ -524,9 +534,13 @@ def request_media_from_overseer(imdb_id, media_type="movie", title=None):
             "mediaId": int(overseerr_id),     # Ensure it's an integer
         }
         
-        # Only include seasons for TV shows
+        # Only include seasons for TV shows AND if specific seasons are identified
         if media_type.lower() == "tv":
-            payload["seasons"] = seasons
+            if seasons: # Check if seasons list is not empty
+                payload["seasons"] = seasons
+            else:
+                # Log that we are requesting all seasons as none were specified
+                logging.info(f"Requesting all available seasons for TV show '{title}' (Overseerr ID: {overseerr_id}) as no specific seasons were identified or fetched.")
         
         # Remove optional params if not needed (some Overseerr instances require this)
         # This line fixes 400 errors from Overseerr API
